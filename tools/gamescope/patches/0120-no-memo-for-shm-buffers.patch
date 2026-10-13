@@ -1,0 +1,50 @@
+From: DroidDeck
+Subject: [PATCH] steamcompmgr: memoize only dma-buf textures
+
+A shm buffer is copied into its Vulkan texture when imported, so the memoized texture kept the
+buffer's first contents. Xwayland without glamor (no GBM, as on Venus) cycles a few shm buffers,
+and the window flickered between old frames. Only dma-bufs are memoized now.
+---
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -1850,16 +1850,24 @@
+ 		commit->fifo = false;
+ 	}
+ 
+-	if ( gamescope::OwningRc<CVulkanTexture> pTexture = s_BufferMemos.LookupVulkanTexture( buf ) )
++	// A shm buffer is copied into the texture when it is imported, so a memoized texture keeps
++	// the buffer's first contents: Xwayland without glamor reuses a few shm buffers, and the
++	// window flickered between old frames. Only dma-bufs, which the texture shares, are memoized.
++	struct wlr_dmabuf_attributes dmabuf = {0};
++	const bool bDmabuf = wlr_buffer_get_dmabuf( buf, &dmabuf );
++
++	if ( bDmabuf )
+ 	{
+-		// Going from OwningRc -> Rc now.
+-		commit->vulkanTex = pTexture;
+-		return commit;
++		if ( gamescope::OwningRc<CVulkanTexture> pTexture = s_BufferMemos.LookupVulkanTexture( buf ) )
++		{
++			// Going from OwningRc -> Rc now.
++			commit->vulkanTex = pTexture;
++			return commit;
++		}
+ 	}
+ 
+-	struct wlr_dmabuf_attributes dmabuf = {0};
+ 	gamescope::OwningRc<gamescope::IBackendFb> pBackendFb;
+-	if ( wlr_buffer_get_dmabuf( buf, &dmabuf ) )
++	if ( bDmabuf )
+ 	{
+ 		pBackendFb = GetBackend()->ImportDmabufToBackend( &dmabuf );
+ 	}
+@@ -1873,7 +1881,8 @@
+ 
+ 	commit->vulkanTex = pOwnedTexture;
+ 
+-	s_BufferMemos.MemoizeBuffer( buf, std::move( pOwnedTexture ) );
++	if ( bDmabuf )
++		s_BufferMemos.MemoizeBuffer( buf, std::move( pOwnedTexture ) );
+ 
+ 	return commit;
+ }

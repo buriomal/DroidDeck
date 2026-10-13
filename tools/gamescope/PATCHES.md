@@ -47,3 +47,8 @@ library list, before anything is published.
 
 Sixteen more of Armada's patches are DRM/lease/HDR-on-KMS work for a native display, which this
 app's Wayland-hosted gamescope never reaches, or need a newer gamescope than the runtime has.
+- `0120-no-memo-for-shm-buffers.patch` - this app: gamescope memoizes the texture it makes for each
+  wl_buffer, which is right for a dma-buf (the texture shares it) but wrong for a shm buffer, whose
+  contents are copied at import. Xwayland without glamor - no GBM on a Mali, where the guest's
+  Vulkan is Venus - cycles a few shm buffers, so the Steam client flickered between stale frames
+  (its library alternating with the "logging in" screen). Only dma-bufs are memoized now.
