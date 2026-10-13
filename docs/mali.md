@@ -23,6 +23,13 @@ Linux side's Vulkan to the device's own driver instead:
   WSI (`MESA_VK_WSI_DEBUG=sw`). The Steam client's interface tries ANGLE-on-Vulkan on Venus and falls
   back to software if the client dies; its own GL windows use llvmpipe.
 
+- **PanVK (experimental, the default where `/dev/mali0` exists)**: Mesa's own Mali driver, built for
+  Android's kbase kernel driver (`tools/mali/build-panvk-kbase.sh`), drives the GPU from the guest
+  with nothing relayed. Mesa marks the G1 series (v14) "not well-tested", so the session sets
+  `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`. `/dev/mali0` is bound into the session as its render
+  node, and `session.log` carries a `panvk probe` section listing the devices the loader found and
+  whether one opened. `Download/droiddeck-mali` containing `venus` goes back to Venus.
+
 All of it is wired in `gpu/MaliVenus.kt`. The guest half ships as `assets/mali/venus-guest.tzst`.
 
 ## Switches

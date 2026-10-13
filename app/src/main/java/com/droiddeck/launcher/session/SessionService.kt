@@ -613,8 +613,13 @@ class SessionService : Service() {
         guest.add("LIBGL_KOPPER_DRI2=true")
         // No Adreno: the guest's Vulkan is Venus, replayed on the vendor driver by a server on the
         // Android side (MaliVenus). It replaces the runtime's Turnip and any imported driver.
-        val venusIcd = if (MaliVenus.enabled()) MaliVenus.prepare(this) else null
-        if (venusIcd != null) {
+        val maliPath = MaliVenus.enabled()
+        val panvkIcd = if (maliPath && MaliVenus.panvk()) MaliVenus.preparePanvk(this) else null
+        val venusIcd = if (maliPath && panvkIcd == null) MaliVenus.prepare(this) else null
+        if (panvkIcd != null) {
+            guest.addAll(MaliVenus.panvkGuestEnv(panvkIcd))
+            Log.i(TAG, "gpu: no Adreno; guest Vulkan is PanVK on " + MaliVenus.MALI_DEVICE)
+        } else if (venusIcd != null) {
             guest.addAll(MaliVenus.guestEnv(this, venusIcd))
             val log = SessionState.logDirectory?.let { File(it, "venus.log") }
             components.add(VenusServerComponent(MaliVenus.socket(this), log).also { it.attach(this) })

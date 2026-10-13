@@ -37,6 +37,13 @@ object MaliVenus {
     private const val OVERRIDE_FILE = "Download/droiddeck-venus"
     const val ICD_LIB = "libvulkan_virtio.so"
     const val LAYER_LIB = "libbcn_layer.so"
+    private const val MODE_FILE = "Download/droiddeck-mali"
+    const val MALI_DEVICE = "/dev/mali0"
+    private const val PANVK_ASSET = "mali/panvk-guest.tzst"
+    /** Bumped with the asset. */
+    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck2"
+    const val PANVK_LIB = "libvulkan_panfrost.so"
+    private const val PROBE = "droiddeck-vkprobe"
 
     fun enabled(): Boolean {
         val forced = FileUtils.readString(File(Environment.getExternalStorageDirectory(), OVERRIDE_FILE))
@@ -47,6 +54,55 @@ object MaliVenus {
             else -> !DeviceSupport.adreno()
         }
     }
+
+    /**
+     * PanVK instead of Venus: Mesa's own Mali driver, built for Android's kbase kernel driver, so the
+     * guest drives the GPU itself with nothing relayed. Experimental on the G1 series (Mesa marks
+     * v14 "not well-tested"). Download/droiddeck-mali says which: "panvk" or "venus"; with nothing
+     * there, PanVK where its asset and the kbase node are present.
+     */
+    fun panvk(): Boolean {
+        val forced = FileUtils.readString(File(Environment.getExternalStorageDirectory(), MODE_FILE))
+            ?.trim()?.lowercase()
+        return when (forced) {
+            "panvk" -> true
+            "venus" -> false
+            else -> File(MALI_DEVICE).exists()
+        }
+    }
+
+    /** PanVK's guest half (the ICD and a probe that logs what the loader finds), unpacked and current. */
+    fun preparePanvk(context: Context): File? {
+        val guest = File(context.filesDir, "mali_panvk")
+        val marker = File(guest, ".version")
+        if (FileUtils.readString(marker)?.trim() != PANVK_VERSION || !File(guest, PANVK_LIB).isFile) {
+            FileUtils.delete(guest)
+            if (!TarZst.extractAsset(context, PANVK_ASSET, guest)) {
+                Log.e(TAG, "could not unpack $PANVK_ASSET")
+                FileUtils.delete(guest)
+                return null
+            }
+            File(guest, PROBE).setExecutable(true, false)
+            FileUtils.writeString(marker, PANVK_VERSION)
+        }
+        val icd = File(guest, "panvk_icd.json")
+        FileUtils.writeString(icd, JSONObject()
+            .put("file_format_version", "1.0.0")
+            .put("ICD", JSONObject()
+                .put("library_path", File(guest, PANVK_LIB).absolutePath)
+                .put("api_version", "1.4.0"))
+            .toString(2))
+        Log.i(TAG, "guest PanVK ready at $guest")
+        return icd
+    }
+
+    fun panvkGuestEnv(icd: File): List<String> = listOf(
+        LinuxVulkanDriver.ENV + "=" + icd.absolutePath,
+        // Mesa refuses v14 (the G1 series) without it: "panvk is not well-tested on v14".
+        "PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1",
+        // Read by the session script: log what the loader finds before anything depends on it.
+        "BL_MALI_PANVK=" + File(icd.parentFile, PROBE).absolutePath,
+    )
 
     fun dir(context: Context): File = File(context.filesDir, "mali_venus")
 

@@ -34,6 +34,7 @@ public final class LinuxRuntime {
     /** Shortcut extra naming which of the modes above a Linux entry launches. */
     public static final String EXTRA_LINUX_MODE = "linux_mode";
     private static final String KGSL_DEVICE = "/dev/kgsl-3d0";
+    private static final String MALI_DEVICE = "/dev/mali0";
     /**
      * Where the guest sees a command's XDG_RUNTIME_DIR. A Unix socket's path must fit in 108 bytes,
      * and libwayland checks the guest's path before proot ever sees it: with the app on an SD card
@@ -297,12 +298,22 @@ public final class LinuxRuntime {
      * Turnip build reports the same device numbers for it.
      */
     private static void bindGpuNode(Context context, List<String> cmd) {
+        // On a Mali (MediaTek) the kbase node stands in the same way, named as mainline names a
+        // Mali's render node (panfrost): PanVK built for kbase reports its device number as the
+        // render and primary node, which gamescope needs to match the device to the compositor's.
+        String gpuDevice = KGSL_DEVICE;
         StructStat st;
         try {
             st = Os.stat(KGSL_DEVICE);
         } catch (ErrnoException e) {
-            return;
+            try {
+                st = Os.stat(MALI_DEVICE);
+                gpuDevice = MALI_DEVICE;
+            } catch (ErrnoException e2) {
+                return;
+            }
         }
+        boolean mali = MALI_DEVICE.equals(gpuDevice);
         long dev = st.st_rdev;
         long major = ((dev >> 8) & 0xfff) | ((dev >> 32) & ~0xfffL);
         long minor = (dev & 0xff) | ((dev >> 12) & ~0xffL);
@@ -319,23 +330,30 @@ public final class LinuxRuntime {
             Files.write(new File(drm, "dev").toPath(),
                     (major + ":" + minor + "\n").getBytes(StandardCharsets.UTF_8));
             Files.write(new File(device, "uevent").toPath(),
-                    "DRIVER=kgsl-3d0\nMODALIAS=platform:kgsl-3d0\n".getBytes(StandardCharsets.UTF_8));
+                    (mali ? "DRIVER=panfrost\nMODALIAS=platform:mali\n" : "DRIVER=kgsl-3d0\nMODALIAS=platform:kgsl-3d0\n")
+                            .getBytes(StandardCharsets.UTF_8));
             File subsystem = new File(device, "subsystem");
             if (!Files.isSymbolicLink(subsystem.toPath())) {
                 Os.symlink("/sys/bus/platform", subsystem.getPath());
             }
             // What MangoHud names a GPU's driver by; msm_drm is how an Adreno's render node reads
-            // on a mainline kernel, and the driver it reads the load of (bindAdrenoStats).
+            // on a mainline kernel, and the driver it reads the load of (bindAdrenoStats); panfrost
+            // is a Mali's.
             File driver = new File(device, "driver");
+            String driverTarget = "/sys/bus/platform/drivers/" + (mali ? "panfrost" : "msm_drm");
+            if (Files.isSymbolicLink(driver.toPath())
+                    && !driverTarget.equals(Files.readSymbolicLink(driver.toPath()).toString())) {
+                Files.delete(driver.toPath());
+            }
             if (!Files.isSymbolicLink(driver.toPath())) {
-                Os.symlink("/sys/bus/platform/drivers/msm_drm", driver.getPath());
+                Os.symlink(driverTarget, driver.getPath());
             }
         } catch (IOException | ErrnoException e) {
             return;
         }
         bind(cmd, new File(base, "sys").getPath() + ":/sys/dev/char");
         bind(cmd, dri.getPath() + ":/dev/dri");
-        bind(cmd, KGSL_DEVICE + ":/dev/dri/" + node);
+        bind(cmd, gpuDevice + ":/dev/dri/" + node);
         bindDrmClass(base, cmd, node, major + ":" + minor);
     }
 
