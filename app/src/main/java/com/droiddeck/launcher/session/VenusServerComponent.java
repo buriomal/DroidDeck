@@ -62,6 +62,8 @@ public class VenusServerComponent extends SessionPart {
         env.add("TMPDIR=" + app().getCacheDir());
         // Built in, the path is the build machine's libexec; without the server every Venus context fails.
         env.add("RENDER_SERVER_EXEC_PATH=" + new File(binary.getParentFile(), RENDER_SERVER).getAbsolutePath());
+        // Venus reports why a call failed (an allocation, a blob export) only at info level.
+        env.add("VIRGL_LOG_LEVEL=info");
         PrintWriter out = null;
         if (logFile != null) {
             try {

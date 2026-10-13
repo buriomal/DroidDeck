@@ -16,7 +16,7 @@ import java.io.File
  * the guest gets Mesa's Venus driver instead, which serialises every Vulkan call over a unix socket;
  * on the other end a virglrenderer server ({@link com.droiddeck.launcher.session.VenusServerComponent})
  * runs out on the Android side and replays them on the vendor's own driver. Memory crosses as
- * AHardwareBuffer-backed dma-bufs, the path termux's virglrenderer-android takes for Android Vulkan.
+ * dma-bufs the vendor driver exports itself (VK_EXT_external_memory_dma_buf, which Mali has).
  *
  * Mali also has no BC texture formats, which DXVK and vkd3d-proton require, so leegao's bcn_layer is
  * put in front of Venus as an implicit layer: it reports BC support and decodes those textures with

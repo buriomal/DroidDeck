@@ -10,12 +10,13 @@ tar xf /work/src/virglrenderer_1.3.0.orig.tar.bz2
 SRC=$(ls -d virglrenderer*/ | head -1); SRC=$W/${SRC%/}
 cp -r /work/src/libepoxy $SRC/libepoxy
 cd $SRC
-for p in $(ls /work/src/tp/packages/virglrenderer-android/*.patch.beforehostbuild | grep -v 0010); do
+# 0010 clashes with NDK 27's libc. 0011 swaps dma_buf for AHardwareBuffer blobs, which Adreno's Android
+# driver needs but Mali does not: Mali exports dma-bufs itself, and with 0011 the first blob the guest
+# asked for failed on the 17T Pro (venus.log: resource_create_blob failed).
+for p in $(ls /work/src/tp/packages/virglrenderer-android/*.patch.beforehostbuild | grep -Ev '0010|0011'); do
   sed "s|@TERMUX_PREFIX@|/data/data/com.droiddeck.launcher/files/usr|g" "$p" > /tmp/p.patch
   echo "== $(basename $p)"; patch -p1 --forward < /tmp/p.patch || patch -p0 --forward < /tmp/p.patch
 done
-# 1.3.0 renamed the allocation hook the termux patch defines.
-sed -i '1i #if defined(__TERMUX__)\n#define vkr_gbm_get_fd_info_from_allocation_info vkr_get_fd_info_from_allocation_info\n#endif' src/venus/vkr_device_memory.c
 cat > $W/cross.txt <<X
 [binaries]
 c = '$TC/bin/aarch64-linux-android$API-clang'
