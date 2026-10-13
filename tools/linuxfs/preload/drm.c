@@ -1,5 +1,5 @@
 /*
- * GEM handle emulation for the KGSL device presented as a DRM render node.
+ * GEM handle emulation for the KGSL device (or, on a Mali, /dev/mali0) presented as a DRM render node.
  *
  * Compositors and Mesa validate or convert dma-bufs with PRIME ioctls on the render node; KGSL
  * has no GEM. Handles only serve as tokens to these callers, so a table of duplicated dma-buf
@@ -42,7 +42,9 @@ static int is_kgsl(int fd) {
   struct stat st;
   pthread_mutex_lock(&lock);
   if (kgsl_state == 0) {
-    kgsl_state = stat("/dev/kgsl-3d0", &st) == 0 ? 1 : -1;
+    /* On a Mali the kbase node stands in as the render node the same way (LinuxRuntime), and
+     * PanVK on kbase has no GEM either. */
+    kgsl_state = (stat("/dev/kgsl-3d0", &st) == 0 || stat("/dev/mali0", &st) == 0) ? 1 : -1;
     kgsl_dev = st.st_rdev;
   }
   pthread_mutex_unlock(&lock);
