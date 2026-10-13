@@ -1,3 +1,42 @@
+diff -ruN a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+--- a/src/venus/vkr_device.c	2026-10-13 14:44:52.564216708 +0000
++++ b/src/venus/vkr_device.c	2026-10-13 14:44:52.583033819 +0000
+@@ -163,6 +163,35 @@
+    }
+ 
+    vn_replace_vkCreateDevice_args_handle(args);
++#ifdef __ANDROID__
++   /* vkGetPhysicalDeviceFeatures* report a few features the driver lacks (see
++    * vkr_physical_device.c); enable only what it really has.
++    */
++   {
++      VkPhysicalDeviceFeatures real;
++      vk->GetPhysicalDeviceFeatures(args->physicalDevice, &real);
++      VkPhysicalDeviceFeatures *wanted[2] = {
++         (VkPhysicalDeviceFeatures *)args->pCreateInfo->pEnabledFeatures, NULL
++      };
++      for (VkBaseOutStructure *s = (VkBaseOutStructure *)args->pCreateInfo->pNext; s;
++           s = s->pNext) {
++         if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
++            wanted[1] = &((VkPhysicalDeviceFeatures2 *)s)->features;
++      }
++      for (int w = 0; w < 2; w++) {
++         if (!wanted[w])
++            continue;
++         VkBool32 *on = (VkBool32 *)wanted[w];
++         const VkBool32 *has = (const VkBool32 *)&real;
++         for (size_t i = 0; i < sizeof(real) / sizeof(VkBool32); i++) {
++            if (on[i] && !has[i]) {
++               vkr_log("device feature #%zu requested but not in the driver: left off", i);
++               on[i] = VK_FALSE;
++            }
++         }
++      }
++   }
++#endif
+    args->ret = vk->CreateDevice(args->physicalDevice, args->pCreateInfo, NULL,
+                                 &dev->base.handle.device);
+    if (args->ret != VK_SUCCESS) {
 diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
 --- a/src/venus/vkr_device_memory.c	2026-10-13 12:13:42.577776128 +0000
 +++ b/src/venus/vkr_device_memory.c	2026-10-13 13:33:10.872131317 +0000
@@ -294,8 +333,114 @@ diff -ruN a/src/venus/vkr_image.c b/src/venus/vkr_image.c
  static void
 diff -ruN a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
 --- a/src/venus/vkr_physical_device.c	2026-10-13 12:30:37.622070446 +0000
-+++ b/src/venus/vkr_physical_device.c	2026-10-13 12:53:27.895089269 +0000
-@@ -703,6 +703,27 @@
++++ b/src/venus/vkr_physical_device.c	2026-10-13 14:45:00.115870762 +0000
+@@ -534,6 +534,84 @@
+           sizeof(*args->pProperties) * count);
+ }
+ 
++#ifdef __ANDROID__
++/* DXVK will not create a D3D11 device without geometry shaders, clip and cull distances and a
++ * few more that Mali lacks; games then stop with "DX11 feature level 10.0 is required". They are
++ * reported here so the game starts, vkCreateDevice leaves off what the driver does not have, and
++ * a pipeline that really needs one fails on its own instead of the whole game.
++ * VKR_FAKE_FEATURES=0 reports the driver's features unchanged.
++ */
++#define VKR_FAKE_FEATURE(n) { offsetof(VkPhysicalDeviceFeatures, n), #n }
++static const struct {
++   size_t offset;
++   const char *name;
++} vkr_android_fake_feature_list[] = {
++   VKR_FAKE_FEATURE(geometryShader),
++   VKR_FAKE_FEATURE(tessellationShader),
++   VKR_FAKE_FEATURE(depthBiasClamp),
++   VKR_FAKE_FEATURE(depthClamp),
++   VKR_FAKE_FEATURE(dualSrcBlend),
++   VKR_FAKE_FEATURE(fillModeNonSolid),
++   VKR_FAKE_FEATURE(fragmentStoresAndAtomics),
++   VKR_FAKE_FEATURE(fullDrawIndexUint32),
++   VKR_FAKE_FEATURE(imageCubeArray),
++   VKR_FAKE_FEATURE(independentBlend),
++   VKR_FAKE_FEATURE(multiDrawIndirect),
++   VKR_FAKE_FEATURE(drawIndirectFirstInstance),
++   VKR_FAKE_FEATURE(multiViewport),
++   VKR_FAKE_FEATURE(occlusionQueryPrecise),
++   VKR_FAKE_FEATURE(sampleRateShading),
++   VKR_FAKE_FEATURE(samplerAnisotropy),
++   VKR_FAKE_FEATURE(shaderClipDistance),
++   VKR_FAKE_FEATURE(shaderCullDistance),
++   VKR_FAKE_FEATURE(shaderImageGatherExtended),
++   VKR_FAKE_FEATURE(shaderInt16),
++   VKR_FAKE_FEATURE(shaderInt64),
++   VKR_FAKE_FEATURE(shaderSampledImageArrayDynamicIndexing),
++};
++#undef VKR_FAKE_FEATURE
++
++static void
++vkr_android_fake_features(VkPhysicalDeviceFeatures *features)
++{
++   static bool logged;
++   const char *env = getenv("VKR_FAKE_FEATURES");
++   if (env && !strcmp(env, "0"))
++      return;
++   for (size_t i = 0; i < sizeof(vkr_android_fake_feature_list) / sizeof(vkr_android_fake_feature_list[0]); i++) {
++      VkBool32 *v = (VkBool32 *)((char *)features + vkr_android_fake_feature_list[i].offset);
++      if (*v)
++         continue;
++      if (!logged)
++         vkr_log("feature %s: not in the driver, reported anyway for DXVK",
++                 vkr_android_fake_feature_list[i].name);
++      *v = VK_TRUE;
++   }
++   logged = true;
++}
++
++static void
++vkr_android_log_missing_ext_features(const void *chain)
++{
++   static bool logged;
++   if (logged)
++      return;
++   logged = true;
++   for (const VkBaseInStructure *s = chain; s; s = s->pNext) {
++      if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT) {
++         const VkPhysicalDeviceRobustness2FeaturesEXT *r = (const void *)s;
++         if (!r->robustBufferAccess2 || !r->nullDescriptor)
++            vkr_log("robustness2: robustBufferAccess2=%u nullDescriptor=%u (DXVK needs both)",
++                    r->robustBufferAccess2, r->nullDescriptor);
++      } else if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT) {
++         const VkPhysicalDeviceDepthClipEnableFeaturesEXT *d = (const void *)s;
++         if (!d->depthClipEnable)
++            vkr_log("depthClipEnable=0 (DXVK needs it)");
++      }
++   }
++}
++#endif
++
+ static void
+ vkr_dispatch_vkGetPhysicalDeviceFeatures(
+    UNUSED struct vn_dispatch_context *dispatch,
+@@ -545,6 +623,9 @@
+ 
+    vn_replace_vkGetPhysicalDeviceFeatures_args_handle(args);
+    vk->GetPhysicalDeviceFeatures(args->physicalDevice, args->pFeatures);
++#ifdef __ANDROID__
++   vkr_android_fake_features(args->pFeatures);
++#endif
+ }
+ 
+ static void
+@@ -638,6 +719,10 @@
+ 
+    vn_replace_vkGetPhysicalDeviceFeatures2_args_handle(args);
+    vk->GetPhysicalDeviceFeatures2(args->physicalDevice, args->pFeatures);
++#ifdef __ANDROID__
++   vkr_android_fake_features(&args->pFeatures->features);
++   vkr_android_log_missing_ext_features(args->pFeatures->pNext);
++#endif
+ }
+ 
+ static void
+@@ -703,6 +788,27 @@
                                            args->pFormatProperties);
  }
  
@@ -323,7 +468,7 @@ diff -ruN a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
  static void
  vkr_dispatch_vkGetPhysicalDeviceImageFormatProperties2(
     UNUSED struct vn_dispatch_context *dispatch,
-@@ -715,6 +736,68 @@
+@@ -715,6 +821,68 @@
     vn_replace_vkGetPhysicalDeviceImageFormatProperties2_args_handle(args);
     args->ret = vk->GetPhysicalDeviceImageFormatProperties2(
        args->physicalDevice, args->pImageFormatInfo, args->pImageFormatProperties);
@@ -392,7 +537,7 @@ diff -ruN a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
  }
  
  static void
-@@ -743,6 +826,11 @@
+@@ -743,6 +911,11 @@
     vn_replace_vkGetPhysicalDeviceExternalBufferProperties_args_handle(args);
     vk->GetPhysicalDeviceExternalBufferProperties(
        args->physicalDevice, args->pExternalBufferInfo, args->pExternalBufferProperties);

@@ -14,6 +14,11 @@ Linux side's Vulkan to the device's own driver instead:
   are applied except 0010 and 0011.
 - **BC textures**: Mali has none and DXVK/vkd3d-proton require them, so leegao's `bcn_layer` sits in
   front of Venus as an implicit layer and decodes them with compute shaders.
+- **Missing features**: DXVK refuses to create a D3D11 device without geometry shaders, clip and
+  cull distances and a few more that Mali lacks, and the game stops with "DX11 feature level 10.0
+  is required". The server reports them anyway and leaves them off at `vkCreateDevice`, so the
+  game starts and only a pipeline that really uses one fails (missing effects rather than no game).
+  `venus.log` lists each one as `feature …: not in the driver`.
 - **Present**: Venus over vtest cannot import dma-bufs, so windows present through Mesa's software
   WSI (`MESA_VK_WSI_DEBUG=sw`). The Steam client's interface tries ANGLE-on-Vulkan on Venus and falls
   back to software if the client dies; its own GL windows use llvmpipe.
