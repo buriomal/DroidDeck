@@ -22,11 +22,11 @@ X
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends crossbuild-essential-arm64 cmake make glslc xxd libvulkan-dev:arm64 >/dev/null
 export PATH=/work/src/slang/bin:$PATH LD_LIBRARY_PATH=/work/src/slang/lib
-B=/work/build/bcn-linux; rm -rf $B
+B=/work/build/bcn-linux
 cmake -S /work/src/bcn_layer -B $B -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
   -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-  -DLIB_INSTALL_DIR=lib
+  -DLIB_INSTALL_DIR=lib -DCMAKE_CXX_FLAGS="-include mutex -include cstdint"
 cmake --build $B -j"$(nproc)"
 mkdir -p /work/out/linux
 cp -v $B/libbcn_layer.so /work/out/linux/
