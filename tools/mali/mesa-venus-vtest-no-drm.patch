@@ -1,0 +1,15 @@
+diff --git a/src/virtio/vulkan/vn_physical_device.c b/src/virtio/vulkan/vn_physical_device.c
+index f3581aa..7524a14 100644
+--- a/src/virtio/vulkan/vn_physical_device.c
++++ b/src/virtio/vulkan/vn_physical_device.c
+@@ -1173,7 +1173,9 @@ vn_physical_device_get_native_extensions(
+    exts->KHR_map_memory2 = true;
+ #if !DETECT_OS_WINDOWS
+    exts->EXT_map_memory_placed = true;
+-   exts->EXT_physical_device_drm = true;
++   /* Over vtest there is no DRM node to report, and gamescope rejects a
++    * device that has the extension but no primary node. */
++   exts->EXT_physical_device_drm = !VN_DEBUG(VTEST);
+ #endif
+    /* use common implementation */
+    exts->EXT_tooling_info = true;

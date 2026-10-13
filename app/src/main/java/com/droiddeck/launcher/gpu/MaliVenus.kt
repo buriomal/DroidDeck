@@ -33,7 +33,7 @@ object MaliVenus {
     private const val TAG = "MaliVenus"
     private const val ASSET = "mali/venus-guest.tzst"
     /** Bumped with the asset, so an app update replaces the unpacked copy. */
-    private const val VERSION = "mesa-26.2.3-venus+bcn_layer-50993a2d"
+    private const val VERSION = "mesa-26.2.3-venus-nodrm+bcn_layer-50993a2d"
     private const val OVERRIDE_FILE = "Download/droiddeck-venus"
     const val ICD_LIB = "libvulkan_virtio.so"
     const val LAYER_LIB = "libbcn_layer.so"
