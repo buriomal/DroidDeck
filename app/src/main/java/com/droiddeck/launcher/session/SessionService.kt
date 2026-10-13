@@ -25,6 +25,7 @@ import android.util.Log
 import com.droiddeck.launcher.R
 import com.droiddeck.launcher.SessionActivity
 import com.droiddeck.launcher.audio.DirectAudioRelayComponent
+import com.droiddeck.launcher.gpu.MaliVenus
 import com.droiddeck.launcher.audio.PulseAudioComponent
 import com.droiddeck.launcher.core.CpuCores
 import com.droiddeck.launcher.core.DeviceReport
@@ -610,20 +611,30 @@ class SessionService : Service() {
         guest.add("MESA_LOADER_DRIVER_OVERRIDE=zink")
         guest.add("GALLIUM_DRIVER=zink")
         guest.add("LIBGL_KOPPER_DRI2=true")
-        LinuxRuntime.vulkanIcd(this)?.let { guest.add("VK_ICD_FILENAMES=" + it.path) }
-        // An imported glibc Turnip, when one is set (by the user, or by Auto): the session script
-        // checks the manifest and its library from inside and points the loader at it with
-        // VK_DRIVER_FILES, so the runtime's own driver above stays untouched and is what a bad
-        // import falls back to. One driver for every session: the driver's shader cache is keyed on
-        // its build, and with one per mode every emulator compiled its shaders twice.
-        val linuxDriverId = SessionPrefs.linuxDriver(this)
-        LinuxVulkanDriver.resolveIcdPath(this, linuxDriverId)
-            ?.let { guest.add(LinuxVulkanDriver.ENV + "=" + it) }
-        // Turnip's own debug switches, for the runtime's driver and everything on it. The file in
-        // Downloads holds the value verbatim ("sysmem", "sysmem,deck_emu"); with nothing there, an
-        // imported driver from the A710/A720/A722 legs gets "sysmem" on its own, which is what both
-        // its authors advise for those GPUs and what nothing else in the list needs.
-        tuDebug(linuxDriverId)?.let { guest.add("TU_DEBUG=$it") }
+        // No Adreno: the guest's Vulkan is Venus, replayed on the vendor driver by a server on the
+        // Android side (MaliVenus). It replaces the runtime's Turnip and any imported driver.
+        val venusIcd = if (MaliVenus.enabled()) MaliVenus.prepare(this) else null
+        if (venusIcd != null) {
+            guest.addAll(MaliVenus.guestEnv(this, venusIcd))
+            val log = SessionState.logDirectory?.let { File(it, "venus.log") }
+            components.add(VenusServerComponent(MaliVenus.socket(this), log).also { it.attach(this) })
+            Log.i(TAG, "gpu: no Adreno; guest Vulkan is Venus over " + MaliVenus.socket(this))
+        } else {
+            LinuxRuntime.vulkanIcd(this)?.let { guest.add("VK_ICD_FILENAMES=" + it.path) }
+            // An imported glibc Turnip, when one is set (by the user, or by Auto): the session script
+            // checks the manifest and its library from inside and points the loader at it with
+            // VK_DRIVER_FILES, so the runtime's own driver above stays untouched and is what a bad
+            // import falls back to. One driver for every session: the driver's shader cache is keyed on
+            // its build, and with one per mode every emulator compiled its shaders twice.
+            val linuxDriverId = SessionPrefs.linuxDriver(this)
+            LinuxVulkanDriver.resolveIcdPath(this, linuxDriverId)
+                ?.let { guest.add(LinuxVulkanDriver.ENV + "=" + it) }
+            // Turnip's own debug switches, for the runtime's driver and everything on it. The file in
+            // Downloads holds the value verbatim ("sysmem", "sysmem,deck_emu"); with nothing there, an
+            // imported driver from the A710/A720/A722 legs gets "sysmem" on its own, which is what both
+            // its authors advise for those GPUs and what nothing else in the list needs.
+            tuDebug(linuxDriverId)?.let { guest.add("TU_DEBUG=$it") }
+        }
         // Zink renders the client's UI (Chromium -> ANGLE -> Zink -> Turnip). Lazy descriptors is
         // the mode Zink recommends where the driver has no descriptor buffer, and what Ludashi ships
         // by default for its Zink path; a switch here because on one Fold the menus run at 14 fps.

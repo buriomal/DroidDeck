@@ -881,6 +881,13 @@ BUSCONF
     _bl_ui=(-gamepadui)
     [ "${BL_STEAM_UI:-}" = desktop ] && _bl_ui=()
     _bl_cef=(-cef-force-gpu -cef-use-gl=angle -cef-use-angle=vulkan)
+    # No Adreno (BL_MALI, set by the app): the guest's Vulkan is Venus with Mesa's software present,
+    # and CEF's ANGLE-on-Vulkan has no DRI3 to present through. BL_MALI_CEF_GPU=1 in
+    # Download/droiddeck-env tries the GPU path anyway.
+    if [ "${BL_MALI:-}" = 1 ] && [ "${BL_MALI_CEF_GPU:-0}" != 1 ]; then
+      _bl_cef=(-cef-disable-gpu)
+      echo "== steam: no Adreno, client interface in software"
+    fi
     if [ "${BL_DESKTOP:-}" = 1 ] && [ "${BL_STEAM_UI:-}" = desktop ]; then
       # KDE uses QPainter/shm on Android. CEF's Vulkan buffers cannot be
       # presented there; its software path keeps the library and dialogs on KDE.

@@ -1092,7 +1092,7 @@
     <string name="main_non_adreno_title">Adreno GPUではありません</string>
 
     <!-- %1$s is the GPU's name, %2$.0f the download size in MB -->
-    <string name="main_non_adreno_text">TurnipはAdreno GPUをサポートしています。%1$sでは、Steamの画面が真っ暗になる可能性があります。ダウンロード：%2$.0f MB。</string>
+    <string name="main_non_adreno_text">TurnipはAdreno専用です。%1$sでは、このビルドはLinux側のVulkanを実験的なVenus中継で端末自身のドライバーに渡し、BCテクスチャはGPUで展開します。不具合や性能低下があり得ます。ダウンロード：%2$.0f MB。</string>
     <string name="main_install_anyway">インストールする</string>
     <string name="main_remove_runtime_title">Linux実行環境を削除</string>
     <string name="main_remove_runtime_text">実行環境、その中のSteamクライアント、そこにインストールされたすべてのゲームが削除されます。</string>
