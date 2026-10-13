@@ -147,7 +147,7 @@ fi
 # PanVK on a Mali (MaliVenus.panvk): what the loader finds, and whether a device opens, before
 # gamescope depends on it. BL_MALI_PANVK is the probe's path.
 if [ -n "${BL_MALI_PANVK:-}" ] && [ -x "$BL_MALI_PANVK" ]; then
-  echo "== panvk probe:"
+  echo "== panvk probe (${BL_MALI_PANVK_BUILD:-unknown build}):"
   timeout 30 "$BL_MALI_PANVK" 2>&1 | head -40 | sed 's/^/   /'
 fi
 # The app's gamescope build (tools/gamescope) asks for realtime-priority Vulkan queues on this

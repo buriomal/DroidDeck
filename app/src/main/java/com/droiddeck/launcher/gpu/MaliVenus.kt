@@ -102,6 +102,8 @@ object MaliVenus {
         "PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1",
         // Read by the session script: log what the loader finds before anything depends on it.
         "BL_MALI_PANVK=" + File(icd.parentFile, PROBE).absolutePath,
+        // Which driver build this is, in the log: two test APKs once looked the same from outside.
+        "BL_MALI_PANVK_BUILD=$PANVK_VERSION",
     )
 
     fun dir(context: Context): File = File(context.filesDir, "mali_venus")
