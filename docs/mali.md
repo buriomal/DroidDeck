@@ -9,7 +9,7 @@ Linux side's Vulkan to the device's own driver instead:
   `files/mali_venus/vtest.sock`. `VenusServerComponent` runs virglrenderer 1.3.0's
   `virgl_test_server --venus` on the Android side (`libvirgl_test_server.so`), which replays the calls
   on `libvulkan.so`. Mali imports dma-bufs but cannot export them, so the server allocates
-  shared memory from `/dev/dma_heap/system` (or gralloc, as a BLOB AHardwareBuffer) and has the
+  shared memory from an uncached dma-buf heap (or gralloc, as a BLOB AHardwareBuffer) and has the
   driver import it (`tools/mali/virgl-android-dmabuf.patch`). termux's virglrenderer-android patches
   are applied except 0010 and 0011.
 - **BC textures**: Mali has none and DXVK/vkd3d-proton require them, so leegao's `bcn_layer` sits in

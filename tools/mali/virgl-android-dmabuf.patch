@@ -1,14 +1,14 @@
 diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
 --- a/src/venus/vkr_device_memory.c	2026-10-13 12:13:42.577776128 +0000
-+++ b/src/venus/vkr_device_memory.c	2026-10-13 12:14:12.590608118 +0000
-@@ -198,6 +198,159 @@
++++ b/src/venus/vkr_device_memory.c	2026-10-13 13:33:10.872131317 +0000
+@@ -198,6 +198,212 @@
     return VK_SUCCESS;
  }
  
 +#elif defined(__ANDROID__)
 +/* Android has no gbm, and its drivers (Mali's among them) import dma-bufs but often cannot export
-+ * them. The storage comes from the system dma-buf heap, or from gralloc as a BLOB
-+ * AHardwareBuffer when the heap is out of reach, and is imported as a plain dma-buf.
++ * them. The storage comes from an uncached dma-buf heap or from gralloc as a BLOB
++ * AHardwareBuffer (see vkr_android_heap_alloc), and is imported as a plain dma-buf.
 + */
 +#include <android/hardware_buffer.h>
 +#include <dlfcn.h>
@@ -28,27 +28,78 @@ diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
 +   int data[];
 +} *vkr_native_handle;
 +
++/* Mali imports a dma-buf without syncing the CPU cache around GPU work, and nothing here can call
++ * DMA_BUF_IOCTL_SYNC for the guest's writes through its mapping, so a cached buffer (the system
++ * heap) left stale lines on the GPU's side: garbled windows. Uncached heaps first, then gralloc
++ * (its BLOB buffers with CPU_*_RARELY usage are uncached on Mali), the cached heap last.
++ * VKR_DMA_HEAPS overrides the heap list, e.g. "system" to compare.
++ */
 +static int
-+vkr_android_heap_alloc(size_t size)
++vkr_android_heap_open(const char *name)
 +{
-+   static int heap_fd = -2;
-+   if (heap_fd == -2) {
-+      heap_fd = open("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
-+      if (heap_fd < 0)
-+         vkr_log("no /dev/dma_heap/system (%s); allocating through gralloc", strerror(errno));
-+   }
-+   if (heap_fd < 0)
-+      return -1;
++   char path[64];
++   snprintf(path, sizeof(path), "/dev/dma_heap/%s", name);
++   return open(path, O_RDONLY | O_CLOEXEC);
++}
 +
++static int
++vkr_android_heap_alloc_from(int heap_fd, const char *name, size_t size)
++{
 +   struct dma_heap_allocation_data data = {
 +      .len = size,
 +      .fd_flags = O_RDWR | O_CLOEXEC,
 +   };
 +   if (ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &data) < 0) {
-+      vkr_log("dma_heap alloc of %zu failed (%s)", size, strerror(errno));
++      vkr_log("dma_heap %s: alloc of %zu failed (%s)", name, size, strerror(errno));
 +      return -1;
 +   }
 +   return (int)data.fd;
++}
++
++/* The first uncached heap that opens, or -1 (then gralloc). */
++static int
++vkr_android_heap_alloc(size_t size)
++{
++   static int heap_fd = -2;
++   static char heap_name[32];
++   if (heap_fd == -2) {
++      const char *list = getenv("VKR_DMA_HEAPS");
++      if (!list || !*list)
++         list = "system-uncached,mtk_mm-uncached";
++      char buf[128];
++      snprintf(buf, sizeof(buf), "%s", list);
++      for (char *save = NULL, *name = strtok_r(buf, ",", &save); name;
++           name = strtok_r(NULL, ",", &save)) {
++         heap_fd = vkr_android_heap_open(name);
++         if (heap_fd >= 0) {
++            snprintf(heap_name, sizeof(heap_name), "%s", name);
++            vkr_log("shared memory from dma_heap %s", name);
++            break;
++         }
++      }
++      if (heap_fd < 0) {
++         heap_fd = -1;
++         vkr_log("no uncached dma_heap among %s; shared memory from gralloc", list);
++      }
++   }
++   if (heap_fd < 0)
++      return -1;
++   return vkr_android_heap_alloc_from(heap_fd, heap_name, size);
++}
++
++/* Last resort: the cached system heap (fine where the GPU snoops the CPU's caches). */
++static int
++vkr_android_cached_heap_alloc(size_t size)
++{
++   static int heap_fd = -2;
++   if (heap_fd == -2) {
++      heap_fd = vkr_android_heap_open("system");
++      vkr_log(heap_fd >= 0 ? "falling back to the cached dma_heap system"
++                           : "no dma_heap system either");
++   }
++   if (heap_fd < 0)
++      return -1;
++   return vkr_android_heap_alloc_from(heap_fd, "system", size);
 +}
 +
 +static int
@@ -77,8 +128,8 @@ diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
 +      .height = 1,
 +      .layers = 1,
 +      .format = AHARDWAREBUFFER_FORMAT_BLOB,
-+      .usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
-+               AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
++      .usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER | AHARDWAREBUFFER_USAGE_CPU_READ_RARELY |
++               AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY,
 +   };
 +   AHardwareBuffer *ahb = NULL;
 +   int ret = AHardwareBuffer_allocate(&desc, &ahb);
@@ -137,6 +188,8 @@ diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
 +   bo->fd = vkr_android_heap_alloc(size);
 +   if (bo->fd < 0)
 +      bo->fd = vkr_android_ahb_alloc(size, &bo->ahb);
++   if (bo->fd < 0)
++      bo->fd = vkr_android_cached_heap_alloc(size);
 +   if (bo->fd < 0) {
 +      free(bo);
 +      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -161,7 +214,7 @@ diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
  #else
  
  static inline int
-@@ -358,6 +511,31 @@
+@@ -358,6 +564,31 @@
        }
     }
  
@@ -193,7 +246,7 @@ diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
     if (export_info) {
        if (export_info->handleTypes & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT)
           valid_fd_types |= 1 << VIRGL_RESOURCE_FD_OPAQUE;
-@@ -367,6 +545,10 @@
+@@ -367,6 +598,10 @@
  
     struct vkr_device_memory *mem = vkr_device_memory_create_and_add(ctx, args);
     if (!mem) {
