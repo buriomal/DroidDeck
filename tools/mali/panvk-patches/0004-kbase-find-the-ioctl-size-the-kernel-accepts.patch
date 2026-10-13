@@ -1,0 +1,400 @@
+--- a/src/panfrost/lib/kmod/kbase_kmod.c	2026-10-13 22:34:59.826572594 +0000
++++ b/src/panfrost/lib/kmod/kbase_kmod.c	2026-10-13 22:34:59.828875698 +0000
+@@ -63,6 +63,70 @@
+ #include "drm-uapi/panthor_drm.h"
+ 
+ #include "kbase_kmod.h"
++
++/* Vendor kbase builds move uAPI structs around between releases without
++ * changing the ioctl numbers, and the kernel then rejects a request whose
++ * encoded size differs with ENOTTY (MediaTek's r54p1 on the Dimensity 9500
++ * does so for MEM_ALLOC_EX and MEM_IMPORT). On ENOTTY for a kbase ioctl,
++ * retry with the size grown (zero-padded) or shrunk in 8-byte steps, keep
++ * whichever the kernel accepts for that ioctl number, and say so once. */
++static int16_t kbase_ioctl_size_delta[256];
++static bool kbase_ioctl_size_known[256];
++
++static int
++kbase_xioctl(int fd, unsigned long req, void *arg)
++{
++   unsigned nr = _IOC_NR(req), size = _IOC_SIZE(req);
++
++   if (_IOC_TYPE(req) != 0x80 || !size || !arg)
++      return ioctl(fd, req, arg);
++
++   if (!kbase_ioctl_size_known[nr] || !kbase_ioctl_size_delta[nr]) {
++      int ret = ioctl(fd, req, arg);
++      if (ret == 0 || errno != ENOTTY || kbase_ioctl_size_known[nr])
++         return ret;
++   }
++
++   uint8_t buf[512];
++   int deltas[64], count = 0;
++   if (kbase_ioctl_size_known[nr]) {
++      deltas[count++] = kbase_ioctl_size_delta[nr];
++   } else {
++      for (int d = 8; d <= 160 && count < 64; d += 8) {
++         deltas[count++] = d;
++         if ((int)size - d >= 8)
++            deltas[count++] = -d;
++      }
++   }
++
++   for (int i = 0; i < count; i++) {
++      unsigned try_size = size + deltas[i];
++      if (try_size > sizeof(buf) || try_size > _IOC_SIZEMASK)
++         continue;
++      memset(buf, 0, sizeof(buf));
++      memcpy(buf, arg, MIN2(size, try_size));
++      unsigned long try_req = _IOC(_IOC_DIR(req), _IOC_TYPE(req), nr, try_size);
++      int ret = ioctl(fd, try_req, buf);
++      if (ret != 0 && errno == ENOTTY)
++         continue;
++      int saved = errno;
++      if (_IOC_DIR(req) & _IOC_READ)
++         memcpy(arg, buf, MIN2(size, try_size));
++      if (!kbase_ioctl_size_known[nr]) {
++         kbase_ioctl_size_known[nr] = true;
++         kbase_ioctl_size_delta[nr] = deltas[i];
++         mesa_logi("kbase: ioctl nr %u takes %u bytes here (built with %u)",
++                   nr, try_size, size);
++      }
++      errno = saved;
++      return ret;
++   }
++   kbase_ioctl_size_known[nr] = true;
++   kbase_ioctl_size_delta[nr] = 0;
++   mesa_loge("kbase: ioctl nr %u refused at every size near %u", nr, size);
++   errno = ENOTTY;
++   return -1;
++}
+ #include "pan_kmod_backend.h"
+ #include "pan_props.h"
+ #include "pan_trace.h"
+@@ -229,7 +293,7 @@
+ {
+    /* First call: size=0 probes the required buffer length. */
+    struct kbase_ioctl_get_gpuprops req = { 0 };
+-   int ret = ioctl(fd, KBASE_IOCTL_GET_GPUPROPS, &req);
++   int ret = kbase_xioctl(fd, KBASE_IOCTL_GET_GPUPROPS, &req);
+    if (ret < 0) {
+       mesa_loge("kbase: KBASE_IOCTL_GET_GPUPROPS (probe) failed: %s",
+                 strerror(errno));
+@@ -249,7 +313,7 @@
+    req.buffer = (uintptr_t)buf;
+    req.size = (uint32_t)size;
+ 
+-   ret = ioctl(fd, KBASE_IOCTL_GET_GPUPROPS, &req);
++   ret = kbase_xioctl(fd, KBASE_IOCTL_GET_GPUPROPS, &req);
+    if (ret < 0) {
+       mesa_loge("kbase: KBASE_IOCTL_GET_GPUPROPS (fill) failed: %s",
+                 strerror(errno));
+@@ -417,7 +481,7 @@
+ {
+    /* First call with zero sizes to learn the group/stream counts. */
+    union kbase_ioctl_cs_get_glb_iface req = { 0 };
+-   if (ioctl(fd, KBASE_IOCTL_CS_GET_GLB_IFACE, &req) < 0) {
++   if (kbase_xioctl(fd, KBASE_IOCTL_CS_GET_GLB_IFACE, &req) < 0) {
+       mesa_loge("kbase: KBASE_IOCTL_CS_GET_GLB_IFACE (probe) failed: %s",
+                 strerror(errno));
+       return -1;
+@@ -446,7 +510,7 @@
+    req.in.groups_ptr = (uintptr_t)groups;
+    req.in.streams_ptr = (uintptr_t)streams;
+ 
+-   int ret = ioctl(fd, KBASE_IOCTL_CS_GET_GLB_IFACE, &req);
++   int ret = kbase_xioctl(fd, KBASE_IOCTL_CS_GET_GLB_IFACE, &req);
+    if (ret < 0) {
+       mesa_loge("kbase: KBASE_IOCTL_CS_GET_GLB_IFACE (fill) failed: %s",
+                 strerror(errno));
+@@ -551,7 +615,7 @@
+          },
+       };
+ 
+-      if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE, &req) == 0) {
++      if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE, &req) == 0) {
+          *group_handle = req.out.group_handle;
+          mesa_logd("kbase: created CSF group %u with CS fault reporting",
+                    *group_handle);
+@@ -580,7 +644,7 @@
+       },
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_6, &req)) {
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_6, &req)) {
+       mesa_loge("kbase: KBASE_IOCTL_CS_QUEUE_GROUP_CREATE failed: %s",
+                 strerror(errno));
+       return -1;
+@@ -696,7 +760,7 @@
+       .group_handle = group_handle,
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE, &req))
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE, &req))
+       mesa_loge("kbase: KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE failed: %s",
+                 strerror(errno));
+ }
+@@ -714,7 +778,7 @@
+                               * empty our tiler heaps under memory pressure. */
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_REGISTER, &reg)) {
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_REGISTER, &reg)) {
+       mesa_loge("kbase: KBASE_IOCTL_CS_QUEUE_REGISTER failed: %s",
+                 strerror(errno));
+       return NULL;
+@@ -728,7 +792,7 @@
+       },
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_BIND, &bind)) {
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_BIND, &bind)) {
+       mesa_loge("kbase: KBASE_IOCTL_CS_QUEUE_BIND failed: %s",
+                 strerror(errno));
+       goto err_term_queue;
+@@ -750,7 +814,7 @@
+       struct kbase_ioctl_cs_queue_terminate term = {
+          .buffer_gpu_addr = ringbuf_va,
+       };
+-      ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_TERMINATE, &term);
++      kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_TERMINATE, &term);
+    }
+    return NULL;
+ }
+@@ -766,7 +830,7 @@
+       .buffer_gpu_addr = ringbuf_va,
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_TERMINATE, &term))
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_TERMINATE, &term))
+       mesa_loge("kbase: KBASE_IOCTL_CS_QUEUE_TERMINATE failed: %s",
+                 strerror(errno));
+ }
+@@ -778,7 +842,7 @@
+       .buffer_gpu_addr = ringbuf_va,
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_KICK, &kick)) {
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_KICK, &kick)) {
+       mesa_loge("kbase: KBASE_IOCTL_CS_QUEUE_KICK failed: %s",
+                 strerror(errno));
+       return -1;
+@@ -865,7 +929,7 @@
+                                base_kcpu_queue_id id)
+ {
+    struct kbase_ioctl_kcpu_queue_delete delete = { .id = id };
+-   if (ioctl(kbase_dev->base.fd, KBASE_IOCTL_KCPU_QUEUE_DELETE, &delete))
++   if (kbase_xioctl(kbase_dev->base.fd, KBASE_IOCTL_KCPU_QUEUE_DELETE, &delete))
+       mesa_logw("kbase: sync export queue %u delete failed: %s", id, strerror(errno));
+ }
+ 
+@@ -939,7 +1003,7 @@
+       }
+ 
+       struct kbase_ioctl_kcpu_queue_new create = {0};
+-      if (ioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_CREATE, &create)) {
++      if (kbase_xioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_CREATE, &create)) {
+          int err = errno;
+          free(token);
+          simple_mtx_unlock(&kbase_dev->sync_exports.lock);
+@@ -968,7 +1032,7 @@
+          .id = create.id,
+       };
+ 
+-      if (ioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_ENQUEUE, &enqueue) ||
++      if (kbase_xioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_ENQUEUE, &enqueue) ||
+           fence.basep.fd < 0) {
+          int err = errno ? errno : EIO;
+          if (fence.basep.fd >= 0) {
+@@ -1041,12 +1105,12 @@
+    simple_mtx_lock(&kbase_dev->sync_exports.lock);
+    kbase_sync_export_reap_locked(kbase_dev);
+    struct kbase_ioctl_kcpu_queue_new create = {0};
+-   if (ioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_CREATE, &create)) { int e=errno;simple_mtx_unlock(&kbase_dev->sync_exports.lock);free(objs);free(token);errno=e;return -1; }
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_CREATE, &create)) { int e=errno;simple_mtx_unlock(&kbase_dev->sync_exports.lock);free(objs);free(token);errno=e;return -1; }
+    token->id=create.id;token->tracker_fd=-1;
+    struct kbase_ioctl_kcpu_queue_enqueue ew={ .addr=(uintptr_t)&wait_cmd,.nr_commands=1,.id=create.id };
+    struct kbase_ioctl_kcpu_queue_enqueue ef={ .addr=(uintptr_t)&fence_cmd,.nr_commands=1,.id=create.id };
+-   if (ioctl(dev->fd,KBASE_IOCTL_KCPU_QUEUE_ENQUEUE,&ew)) { int e=errno;kbase_sync_export_delete_queue(kbase_dev,create.id);simple_mtx_unlock(&kbase_dev->sync_exports.lock);free(objs);free(token);errno=e;return -1; }
+-   if (ioctl(dev->fd,KBASE_IOCTL_KCPU_QUEUE_ENQUEUE,&ef) || fence.basep.fd < 0) {
++   if (kbase_xioctl(dev->fd,KBASE_IOCTL_KCPU_QUEUE_ENQUEUE,&ew)) { int e=errno;kbase_sync_export_delete_queue(kbase_dev,create.id);simple_mtx_unlock(&kbase_dev->sync_exports.lock);free(objs);free(token);errno=e;return -1; }
++   if (kbase_xioctl(dev->fd,KBASE_IOCTL_KCPU_QUEUE_ENQUEUE,&ef) || fence.basep.fd < 0) {
+       int e=errno?errno:EIO;if(fence.basep.fd>=0)close(fence.basep.fd);token->next=kbase_dev->sync_exports.head;kbase_dev->sync_exports.head=token;simple_mtx_unlock(&kbase_dev->sync_exports.lock);free(objs);errno=e;return -1;
+    }
+    token->tracker_fd=fence.basep.fd;token->next=kbase_dev->sync_exports.head;kbase_dev->sync_exports.head=token;
+@@ -1153,8 +1217,8 @@
+    /* The public ioctl envelope has a command count, but shipping kbase
+     * implementations require exactly one command per enqueue.  Put the
+     * fence behind the CQS wait with a second ioctl. */
+-   if (ioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_ENQUEUE, &enqueue_wait) ||
+-       ioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_ENQUEUE, &enqueue_fence) ||
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_ENQUEUE, &enqueue_wait) ||
++       kbase_xioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_ENQUEUE, &enqueue_fence) ||
+        fence.basep.fd < 0) {
+       mesa_logd("kbase: KCPU CQS wait unavailable: %s",
+                 fence.basep.fd < 0 && errno == 0 ? "no sync fence" :
+@@ -1188,7 +1252,7 @@
+       struct kbase_ioctl_kcpu_queue_delete delete = {
+          .id = kbase_dev->kcpu.id,
+       };
+-      ioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_DELETE, &delete);
++      kbase_xioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_DELETE, &delete);
+       kbase_dev->kcpu.valid = false;
+    }
+    mesa_loge("kbase: kcpu queue disabled due to error");
+@@ -1228,7 +1292,7 @@
+       },
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_TILER_HEAP_INIT, &req)) {
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_TILER_HEAP_INIT, &req)) {
+       mesa_loge("kbase: KBASE_IOCTL_CS_TILER_HEAP_INIT failed: %s",
+                 strerror(errno));
+       return -1;
+@@ -1247,7 +1311,7 @@
+       .gpu_heap_va = heap_ctx_va,
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_CS_TILER_HEAP_TERM, &req))
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_CS_TILER_HEAP_TERM, &req))
+       mesa_loge("kbase: KBASE_IOCTL_CS_TILER_HEAP_TERM failed: %s",
+                 strerror(errno));
+ }
+@@ -1291,7 +1355,7 @@
+          },
+       };
+ 
+-      if (ioctl(dev->fd, KBASE_IOCTL_MEM_ALIAS, &req)) {
++      if (kbase_xioctl(dev->fd, KBASE_IOCTL_MEM_ALIAS, &req)) {
+          mesa_loge("kbase: KBASE_IOCTL_MEM_ALIAS failed: %s",
+                    strerror(errno));
+          return 0;
+@@ -1306,7 +1370,7 @@
+          mesa_loge("kbase: mmap of alias region failed: %s",
+                    strerror(errno));
+          struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+-         ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
++         kbase_xioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+          return 0;
+       }
+ 
+@@ -1348,9 +1412,9 @@
+    struct kbase_ioctl_version_check ver = { 0 };
+    bool is_csf = false;
+ 
+-   if (ioctl(fd, KBASE_IOCTL_VERSION_CHECK_CSF, &ver) == 0) {
++   if (kbase_xioctl(fd, KBASE_IOCTL_VERSION_CHECK_CSF, &ver) == 0) {
+       is_csf = true;
+-   } else if (ioctl(fd, KBASE_IOCTL_VERSION_CHECK_JM, &ver) == 0) {
++   } else if (kbase_xioctl(fd, KBASE_IOCTL_VERSION_CHECK_JM, &ver) == 0) {
+       is_csf = false;
+ 
+       if (ver.major < 11) {
+@@ -1372,7 +1436,7 @@
+    /* Set context creation flags.  Zero for maximum compatibility; this also
+     * creates the kernel-side context. */
+    struct kbase_ioctl_set_flags set_flags = { .create_flags = 0 };
+-   if (ioctl(fd, KBASE_IOCTL_SET_FLAGS, &set_flags)) {
++   if (kbase_xioctl(fd, KBASE_IOCTL_SET_FLAGS, &set_flags)) {
+       mesa_loge("kbase: KBASE_IOCTL_SET_FLAGS failed: %s", strerror(errno));
+       return NULL;
+    }
+@@ -1408,7 +1472,7 @@
+       .max_allocations = 255,
+       .phys_pages = 1ull << 25,
+    };
+-   if (ioctl(fd, KBASE_IOCTL_MEM_JIT_INIT, &jit_init)) {
++   if (kbase_xioctl(fd, KBASE_IOCTL_MEM_JIT_INIT, &jit_init)) {
+       mesa_logw("kbase: KBASE_IOCTL_MEM_JIT_INIT failed: %s "
+                 "(tiler heap creation will not work)", strerror(errno));
+    }
+@@ -1419,7 +1483,7 @@
+     * automatically and this is a no-op.  Failure is not fatal for
+     * enumeration, but executable allocations will fail later, so warn. */
+    struct kbase_ioctl_mem_exec_init exec_init = { .va_pages = 0x100000 };
+-   if (ioctl(fd, KBASE_IOCTL_MEM_EXEC_INIT, &exec_init)) {
++   if (kbase_xioctl(fd, KBASE_IOCTL_MEM_EXEC_INIT, &exec_init)) {
+       mesa_logw("kbase: KBASE_IOCTL_MEM_EXEC_INIT failed: %s "
+                 "(executable BO allocation will not work)", strerror(errno));
+    }
+@@ -1526,7 +1590,7 @@
+     * for future async WSI fence export. */
+    if (is_csf && kcpu_sync && !strcmp(kcpu_sync, "1")) {
+       struct kbase_ioctl_kcpu_queue_new create = { 0 };
+-      if (!ioctl(fd, KBASE_IOCTL_KCPU_QUEUE_CREATE, &create)) {
++      if (!kbase_xioctl(fd, KBASE_IOCTL_KCPU_QUEUE_CREATE, &create)) {
+          kbase_dev->kcpu.id = create.id;
+          kbase_dev->kcpu.valid = true;
+          mesa_logd("kbase: created KCPU queue %u", create.id);
+@@ -1560,7 +1624,7 @@
+       struct kbase_ioctl_kcpu_queue_delete delete = {
+          .id = kbase_dev->kcpu.id,
+       };
+-      ioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_DELETE, &delete);
++      kbase_xioctl(dev->fd, KBASE_IOCTL_KCPU_QUEUE_DELETE, &delete);
+    }
+    simple_mtx_unlock(&kbase_dev->kcpu.lock);
+    simple_mtx_destroy(&kbase_dev->sync_exports.lock);
+@@ -1688,7 +1752,7 @@
+       },
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req)) {
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req)) {
+       mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: %s", strerror(errno));
+       goto err_close_dmabuf;
+    }
+@@ -1705,7 +1769,7 @@
+                 strerror(errno));
+       kbase_bo->gpu_mapping = NULL;
+       struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+-      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
++      kbase_xioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+       goto err_close_dmabuf;
+    }
+ 
+@@ -1737,7 +1801,7 @@
+    munmap(kbase_bo->gpu_mapping, bo_size);
+    if (!kbase_bo->same_va) {
+       struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+-      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
++      kbase_xioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+    }
+ err_close_dmabuf:
+    close(kbase_bo->dmabuf_fd);
+@@ -1854,7 +1918,7 @@
+          },
+       };
+ 
+-      if (ioctl(dev->fd, KBASE_IOCTL_MEM_ALLOC, &req)) {
++      if (kbase_xioctl(dev->fd, KBASE_IOCTL_MEM_ALLOC, &req)) {
+          mesa_loge("kbase: KBASE_IOCTL_MEM_ALLOC failed: %s", strerror(errno));
+          goto err_free_bo;
+       }
+@@ -1882,7 +1946,7 @@
+ 
+       /* MEM_FREE works on both real VAs and pending cookies. */
+       struct kbase_ioctl_mem_free free_req = { .gpu_addr = alloc_gpu_va };
+-      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
++      kbase_xioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+       goto err_free_bo;
+    }
+ 
+@@ -1924,7 +1988,7 @@
+ 
+    if (!kbase_bo->same_va) {
+       struct kbase_ioctl_mem_free req = { .gpu_addr = kbase_bo->gpu_va };
+-      if (ioctl(bo->dev->fd, KBASE_IOCTL_MEM_FREE, &req))
++      if (kbase_xioctl(bo->dev->fd, KBASE_IOCTL_MEM_FREE, &req))
+          mesa_loge("kbase: KBASE_IOCTL_MEM_FREE failed: %s", strerror(errno));
+    }
+ 
+@@ -2163,7 +2227,7 @@
+       .in.request_flags = BASE_TIMEINFO_TIMESTAMP_FLAG,
+    };
+ 
+-   if (ioctl(dev->fd, KBASE_IOCTL_GET_CPU_GPU_TIMEINFO, &req) == 0)
++   if (kbase_xioctl(dev->fd, KBASE_IOCTL_GET_CPU_GPU_TIMEINFO, &req) == 0)
+       return req.out.timestamp;
+ 
+    return 0;
