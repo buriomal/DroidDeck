@@ -204,9 +204,44 @@ diff -ruN a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
        if (local_import_info.fd >= 0)
           close(local_import_info.fd);
        if (gbm_bo)
+diff -ruN a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+--- a/src/venus/vkr_image.c	2026-10-13 12:53:27.861254220 +0000
++++ b/src/venus/vkr_image.c	2026-10-13 12:53:27.893667926 +0000
+@@ -31,7 +31,31 @@
+     * situation because the app does not consider the memory external.
+     */
+ 
++#if defined(__ANDROID__)
++   /* A driver that only imports dma-bufs may refuse an image meant for export (see
++    * vkr_dispatch_vkGetPhysicalDeviceImageFormatProperties2); the memory is imported from a
++    * dma-buf allocated outside it either way, so make the image without the external info.
++    */
++   if (!vkr_image_create_and_add(dispatch->data, args)) {
++      VkBaseInStructure *prev = vkr_find_prev_struct(
++         args->pCreateInfo, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
++      if (prev) {
++         const VkResult first = args->ret;
++         prev->pNext = ((const VkBaseInStructure *)prev->pNext)->pNext;
++         vkr_image_create_and_add(dispatch->data, args);
++         vkr_log("vkCreateImage format %d usage 0x%x tiling %d failed (vk ret %d) as external; "
++                 "without: vk ret %d",
++                 args->pCreateInfo->format, args->pCreateInfo->usage, args->pCreateInfo->tiling,
++                 first, args->ret);
++      } else {
++         vkr_log("vkCreateImage format %d usage 0x%x tiling %d failed (vk ret %d)",
++                 args->pCreateInfo->format, args->pCreateInfo->usage, args->pCreateInfo->tiling,
++                 args->ret);
++      }
++   }
++#else
+    vkr_image_create_and_add(dispatch->data, args);
++#endif
+ }
+ 
+ static void
 diff -ruN a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
 --- a/src/venus/vkr_physical_device.c	2026-10-13 12:30:37.622070446 +0000
-+++ b/src/venus/vkr_physical_device.c	2026-10-13 12:30:37.636658198 +0000
++++ b/src/venus/vkr_physical_device.c	2026-10-13 12:53:27.895089269 +0000
 @@ -703,6 +703,27 @@
                                            args->pFormatProperties);
  }
@@ -235,7 +270,7 @@ diff -ruN a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
  static void
  vkr_dispatch_vkGetPhysicalDeviceImageFormatProperties2(
     UNUSED struct vn_dispatch_context *dispatch,
-@@ -715,6 +736,16 @@
+@@ -715,6 +736,68 @@
     vn_replace_vkGetPhysicalDeviceImageFormatProperties2_args_handle(args);
     args->ret = vk->GetPhysicalDeviceImageFormatProperties2(
        args->physicalDevice, args->pImageFormatInfo, args->pImageFormatProperties);
@@ -245,14 +280,66 @@ diff -ruN a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
 +      args->pImageFormatInfo->pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO);
 +   VkExternalImageFormatProperties *ext_props = vkr_find_struct(
 +      args->pImageFormatProperties->pNext, VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES);
-+   if (args->ret == VK_SUCCESS && ext_info && ext_props)
++   if (ext_info && ext_props &&
++       ext_info->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT &&
++       !physical_dev->is_dma_buf_fd_export_supported) {
++      const VkPhysicalDeviceImageDrmFormatModifierInfoEXT *mod_info = vkr_find_struct(
++         args->pImageFormatInfo->pNext,
++         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT);
++      const VkResult first = args->ret;
++      const VkExternalMemoryFeatureFlags first_features =
++         ext_props->externalMemoryProperties.externalMemoryFeatures;
++
++      /* The driver may refuse the image as an external one (export, or a usage it will not
++       * import with) while it can make it as a plain one. Its memory comes from a dma-buf
++       * allocated outside the driver either way (vkr_dispatch_vkCreateImage drops the external
++       * info to match), so ask again without the external info.
++       */
++      if (args->ret != VK_SUCCESS) {
++         VkBaseInStructure *prev = vkr_find_prev_struct(
++            args->pImageFormatInfo, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO);
++         VkBaseInStructure *ext_props_prev = vkr_find_prev_struct(
++            args->pImageFormatProperties, VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES);
++         const void *ext_info_next = ext_info->pNext;
++         const void *ext_props_next = ext_props->pNext;
++         prev->pNext = ext_info_next;
++         ext_props_prev->pNext = ext_props_next;
++         args->ret = vk->GetPhysicalDeviceImageFormatProperties2(
++            args->physicalDevice, args->pImageFormatInfo, args->pImageFormatProperties);
++         prev->pNext = (const VkBaseInStructure *)ext_info;
++         ext_props_prev->pNext = (VkBaseInStructure *)ext_props;
++         ext_props->pNext = (void *)ext_props_next;
++         if (args->ret == VK_SUCCESS) {
++            ext_props->externalMemoryProperties = (VkExternalMemoryProperties){
++               .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT |
++                                         VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT,
++               .exportFromImportedHandleTypes = 0,
++               .compatibleHandleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++            };
++         }
++      }
++      if (args->ret == VK_SUCCESS)
++         vkr_android_fake_dma_buf_export(physical_dev, ext_info->handleType,
++                                         &ext_props->externalMemoryProperties);
++
++      vkr_log("dma-buf image query: format %d usage 0x%x flags 0x%x tiling %d modifier 0x%llx: "
++              "vk ret %d features 0x%x%s",
++              args->pImageFormatInfo->format, args->pImageFormatInfo->usage,
++              args->pImageFormatInfo->flags, args->pImageFormatInfo->tiling,
++              mod_info ? (unsigned long long)mod_info->drmFormatModifier : 0ull, first,
++              first_features,
++              first == VK_SUCCESS ? ""
++              : args->ret == VK_SUCCESS ? " -> plain image ok, reported exportable"
++                                        : " -> plain image refused too");
++   } else if (args->ret == VK_SUCCESS && ext_info && ext_props) {
 +      vkr_android_fake_dma_buf_export(physical_dev, ext_info->handleType,
 +                                      &ext_props->externalMemoryProperties);
++   }
 +#endif
  }
  
  static void
-@@ -743,6 +774,11 @@
+@@ -743,6 +826,11 @@
     vn_replace_vkGetPhysicalDeviceExternalBufferProperties_args_handle(args);
     vk->GetPhysicalDeviceExternalBufferProperties(
        args->physicalDevice, args->pExternalBufferInfo, args->pExternalBufferProperties);
