@@ -31,5 +31,5 @@ driver the guest loaded. Share logs from Setup as usual.
 
 ## Rebuilding the native parts
 
-`tools/mali/` holds the scripts that built the binaries (Mesa with `mesa-venus-vtest-no-drm.patch` applied): `build-virgl-android.sh` (NDK 27.3),
+`tools/mali/` holds the scripts that built the binaries (Mesa with `mesa-venus-vtest.patch` applied): `build-virgl-android.sh` (NDK 27.3),
 `build-mesa-venus.sh` and `build-bcn-linux.sh` (cross-built in ubuntu:25.10).

@@ -1,0 +1,78 @@
+diff --git a/src/virtio/vulkan/vn_physical_device.c b/src/virtio/vulkan/vn_physical_device.c
+index f3581aa..935ccdd 100644
+--- a/src/virtio/vulkan/vn_physical_device.c
++++ b/src/virtio/vulkan/vn_physical_device.c
+@@ -1060,7 +1060,9 @@ vn_physical_device_init_external_fence_handles(
+ {
+    physical_dev->external_fence_handles = 0;
+ 
+-   if (physical_dev->instance->renderer->info.has_external_sync) {
++   /* vtest: SYNC_FD export is emulated by a CPU wait (vtest_sync_export_syncobj) */
++   if (physical_dev->instance->renderer->info.has_external_sync ||
++       VN_DEBUG(VTEST)) {
+ #if !DETECT_OS_WINDOWS
+       physical_dev->external_fence_handles =
+          VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT;
+@@ -1095,7 +1097,8 @@ vn_physical_device_init_external_semaphore_handles(
+    physical_dev->external_binary_semaphore_handles = 0;
+    physical_dev->external_timeline_semaphore_handles = 0;
+ 
+-   if (physical_dev->instance->renderer->info.has_external_sync) {
++   if (physical_dev->instance->renderer->info.has_external_sync ||
++       VN_DEBUG(VTEST)) {
+ #if !DETECT_OS_WINDOWS
+       physical_dev->external_binary_semaphore_handles =
+          VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+@@ -1173,7 +1176,9 @@ vn_physical_device_get_native_extensions(
+    exts->KHR_map_memory2 = true;
+ #if !DETECT_OS_WINDOWS
+    exts->EXT_map_memory_placed = true;
+-   exts->EXT_physical_device_drm = true;
++   /* Over vtest there is no DRM node to report, and gamescope rejects a
++    * device that has the extension but no primary node. */
++   exts->EXT_physical_device_drm = !VN_DEBUG(VTEST);
+ #endif
+    /* use common implementation */
+    exts->EXT_tooling_info = true;
+diff --git a/src/virtio/vulkan/vn_renderer_vtest.c b/src/virtio/vulkan/vn_renderer_vtest.c
+index fc59d32..e010907 100644
+--- a/src/virtio/vulkan/vn_renderer_vtest.c
++++ b/src/virtio/vulkan/vn_renderer_vtest.c
+@@ -863,6 +863,28 @@ vtest_wait(struct vn_renderer *renderer, const struct vn_renderer_wait *wait)
+    return result;
+ }
+ 
++/* vtest has no sync files. A SYNC_FD export waits for the sync on the CPU and
++ * hands back -1, which Vulkan defines as an already-signaled sync file. Slow,
++ * but it lets gamescope (which requires VK_KHR_external_semaphore_fd) run. */
++static int
++vtest_sync_export_syncobj(struct vn_renderer *renderer,
++                          struct vn_renderer_sync *sync,
++                          bool sync_file)
++{
++   if (!sync_file)
++      return -1;
++
++   const uint64_t val = 1;
++   const struct vn_renderer_wait wait = {
++      .timeout = UINT64_MAX,
++      .syncs = &sync,
++      .sync_values = &val,
++      .sync_count = 1,
++   };
++   vtest_wait(renderer, &wait);
++   return -1;
++}
++
+ static VkResult
+ vtest_submit(struct vn_renderer *renderer,
+              const struct vn_renderer_submit_batch *batch)
+@@ -1042,7 +1064,7 @@ vtest_init(struct vtest *vtest)
+    vtest->base.sync_ops.create = vtest_sync_create;
+    vtest->base.sync_ops.create_from_syncobj = NULL;
+    vtest->base.sync_ops.destroy = vtest_sync_destroy;
+-   vtest->base.sync_ops.export_syncobj = NULL;
++   vtest->base.sync_ops.export_syncobj = vtest_sync_export_syncobj;
+    vtest->base.sync_ops.reset = vtest_sync_reset;
+    vtest->base.sync_ops.read = vtest_sync_read;
+    vtest->base.sync_ops.write = vtest_sync_write;
