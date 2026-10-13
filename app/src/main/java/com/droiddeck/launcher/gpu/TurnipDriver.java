@@ -342,7 +342,7 @@ public final class TurnipDriver {
         // Mali, Xclipse, PowerVR: Turnip cannot open a GPU without KGSL, so the compositor goes to
         // the vendor's own Vulkan. Mali drivers from r4x on import dma-bufs with modifiers, which is
         // all the compositor needs.
-        if (!com.droiddeck.launcher.core.DeviceSupport.adreno()) {
+        if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.adreno()) {
             Log.i(TAG, "no Adreno GPU; compositor uses the system Vulkan driver");
             return null;
         }
