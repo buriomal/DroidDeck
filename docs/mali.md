@@ -15,7 +15,8 @@ Linux side's Vulkan to the device's own driver instead:
 - **BC textures**: Mali has none and DXVK/vkd3d-proton require them, so leegao's `bcn_layer` sits in
   front of Venus as an implicit layer and decodes them with compute shaders.
 - **Present**: Venus over vtest cannot import dma-bufs, so windows present through Mesa's software
-  WSI (`MESA_VK_WSI_DEBUG=sw`) and the Steam client's interface draws in software.
+  WSI (`MESA_VK_WSI_DEBUG=sw`). The Steam client's interface tries ANGLE-on-Vulkan on Venus and falls
+  back to software if the client dies; its own GL windows use llvmpipe.
 
 All of it is wired in `gpu/MaliVenus.kt`. The guest half ships as `assets/mali/venus-guest.tzst`.
 
@@ -23,7 +24,8 @@ All of it is wired in `gpu/MaliVenus.kt`. The guest half ships as `assets/mali/v
 
 - `Download/droiddeck-venus`: `on` forces the Venus path on an Adreno, `off` turns it off on a Mali.
 - `Download/droiddeck-env` lines override the session's environment, e.g.
-  `BL_MALI_CEF_GPU=1` (try the client's GPU interface), `BL_MALI_GL=zink` (the client's GL windows
+  `BL_MALI_CEF_GPU=0` (the client's interface in software from the start; by default it tries the
+  GPU and falls back when the client dies within 90 s), `BL_MALI_GL=zink` (the client's GL windows
   through Zink on Venus instead of llvmpipe), `MESA_VK_WSI_DEBUG=` (try hardware present),
   `DISABLE_BCN_COMPUTE=1` (no BC layer), `VN_DEBUG=vtest,init` (more Venus logging).
 

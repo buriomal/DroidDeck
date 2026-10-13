@@ -882,11 +882,18 @@ BUSCONF
     [ "${BL_STEAM_UI:-}" = desktop ] && _bl_ui=()
     _bl_cef=(-cef-force-gpu -cef-use-gl=angle -cef-use-angle=vulkan)
     # No Adreno (BL_MALI, set by the app): the guest's Vulkan is Venus with Mesa's software present,
-    # and CEF's ANGLE-on-Vulkan has no DRI3 to present through. BL_MALI_CEF_GPU=1 in
-    # Download/droiddeck-env tries the GPU path anyway.
-    if [ "${BL_MALI:-}" = 1 ] && [ "${BL_MALI_CEF_GPU:-0}" != 1 ]; then
-      _bl_cef=(-cef-disable-gpu)
-      echo "== steam: no Adreno, client interface in software"
+    # which also serves ANGLE-on-Vulkan through the Gamescope WSI layer. Drawn on the CPU the
+    # interface ran at 3-17 fps, so the GPU path is tried first; a client that dies within
+    # 90 s of starting with it is started again in software (below, after it exits).
+    # BL_MALI_CEF_GPU=0 in Download/droiddeck-env goes straight to software.
+    if [ "${BL_MALI:-}" = 1 ]; then
+      if [ "${BL_MALI_CEF_GPU:-1}" = 0 ]; then
+        _bl_cef=(-cef-disable-gpu)
+        echo "== steam: no Adreno, client interface in software (BL_MALI_CEF_GPU=0)"
+      else
+        _bl_mali_cef_gpu=1
+        echo "== steam: no Adreno, client interface on the GPU through Venus (software if it fails)"
+      fi
     fi
     # The client's own GL windows (the updater, the main window) went through Zink on Venus and
     # the client aborted right after creating its first window there. llvmpipe draws them on the
@@ -1062,6 +1069,7 @@ BUSCONF
         droiddeck-steam-language "$HOME" "$BL_STEAM_LANGUAGE" || true
       fi
       step "starting the Steam client${BL_STEAM_UI:+ ($BL_STEAM_UI UI)}"
+      _bl_steam_started=$SECONDS
       desktop_ui_pid=
       if [ "${BL_STEAM_UI:-}" = desktop ]; then
         /usr/local/bin/droiddeck-steam-desktop-ui &
@@ -1096,6 +1104,13 @@ BUSCONF
         rm -f "$STEAMOS_STEAM_REBOOT_SENTINEL"
         echo "== steam: Restart from the power menu; starting the client again"
         set --
+        continue
+      fi
+      if [ -n "${_bl_mali_cef_gpu:-}" ] && [ "$rc" -ne 0 ] && [ "$rc" -ne 42 ] &&
+         [ $((SECONDS - _bl_steam_started)) -lt 90 ]; then
+        _bl_mali_cef_gpu=
+        _bl_cef=(-cef-disable-gpu)
+        echo "== steam: the client died (rc=$rc) with its interface on the GPU; starting it again in software"
         continue
       fi
       # The session asked for this exit (the ARM64 Proton landed): start again, without the URL

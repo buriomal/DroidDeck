@@ -107,8 +107,8 @@ object MaliVenus {
             // Venus over vtest cannot import a dma-buf, so a window's buffers cannot be handed to
             // Xwayland or gamescope by DRI3. Mesa's software present copies them instead.
             "MESA_VK_WSI_DEBUG=sw",
-            // Read by the session script: the Steam client's interface draws in software, since
-            // its ANGLE-on-Vulkan path has no way to present without DRI3 either.
+            // Read by the session script: the Steam client's own GL windows draw with llvmpipe, and its
+            // interface tries ANGLE-on-Vulkan before falling back to software.
             "BL_MALI=1",
         ) + if (File(guest, LAYER_LIB).isFile) listOf(
             "VK_ADD_IMPLICIT_LAYER_PATH=" + File(guest, "implicit_layer.d").absolutePath,
