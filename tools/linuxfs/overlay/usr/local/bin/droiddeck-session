@@ -95,6 +95,12 @@ collect_steam_logs() {
   [ -d "$steam_root/logs" ] && find "$steam_root/logs" -maxdepth 1 -type f -size -8192k \
     -exec cp {} "$BL_DEBUG_DIR/steam/" \; 2>/dev/null
   [ -f "$HOME/.steam/steam/logs/steamwebhelper.log" ] && cp "$HOME/.steam/steam/logs/steamwebhelper.log" "$BL_DEBUG_DIR/steam/" 2>/dev/null
+  # Proton's own log (PROTON_LOG=1 in the game options) lands in $HOME as steam-<appid>.log;
+  # the last 8 MB is the part that says how the game ended.
+  local proton_log
+  for proton_log in "$HOME"/steam-[0-9]*.log; do
+    [ -f "$proton_log" ] && tail -c 8388608 "$proton_log" >"$BL_DEBUG_DIR/steam/${proton_log##*/}" 2>/dev/null
+  done
   # NOT copied, ever: loginusers.vdf, config.vdf and the ssfn* files, which hold the credentials
   # themselves rather than a mention of them.
   local sync_store=$HOME/.local/share/droiddeck-esync sync_file
@@ -902,6 +908,12 @@ BUSCONF
       export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe
       unset MESA_LOADER_DRIVER_OVERRIDE LIBGL_KOPPER_DRI2
       echo "== steam: no Adreno, client GL in software (llvmpipe)"
+    fi
+    # A game that closed on Mali left nothing behind: Proton silences Wine and DXVK unless told
+    # otherwise. Errors and warnings only, which cost next to nothing, reach the session log.
+    if [ "${BL_MALI:-}" = 1 ]; then
+      : "${WINEDEBUG:=err+all,fixme-all}" "${DXVK_LOG_LEVEL:=warn}" "${VKD3D_DEBUG:=err}"
+      export WINEDEBUG DXVK_LOG_LEVEL VKD3D_DEBUG
     fi
     if [ "${BL_DESKTOP:-}" = 1 ] && [ "${BL_STEAM_UI:-}" = desktop ]; then
       # KDE uses QPainter/shm on Android. CEF's Vulkan buffers cannot be
