@@ -33,7 +33,7 @@ object MaliVenus {
     private const val TAG = "MaliVenus"
     private const val ASSET = "mali/venus-guest.tzst"
     /** Bumped with the asset, so an app update replaces the unpacked copy. */
-    private const val VERSION = "mesa-26.2.3-venus+bcn_layer-50993a2d"
+    private const val VERSION = "mesa-26.2.3-venus-1"
     private const val OVERRIDE_FILE = "Download/droiddeck-venus"
     const val ICD_LIB = "libvulkan_virtio.so"
     const val LAYER_LIB = "libbcn_layer.so"
@@ -107,11 +107,12 @@ object MaliVenus {
             // Venus over vtest cannot import a dma-buf, so a window's buffers cannot be handed to
             // Xwayland or gamescope by DRI3. Mesa's software present copies them instead.
             "MESA_VK_WSI_DEBUG=sw",
-            "VK_ADD_IMPLICIT_LAYER_PATH=" + File(guest, "implicit_layer.d").absolutePath,
-            "ENABLE_BCN_COMPUTE=1",
             // Read by the session script: the Steam client's interface draws in software, since
             // its ANGLE-on-Vulkan path has no way to present without DRI3 either.
             "BL_MALI=1",
-        )
+        ) + if (File(guest, LAYER_LIB).isFile) listOf(
+            "VK_ADD_IMPLICIT_LAYER_PATH=" + File(guest, "implicit_layer.d").absolutePath,
+            "ENABLE_BCN_COMPUTE=1",
+        ) else emptyList()
     }
 }
