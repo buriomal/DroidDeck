@@ -102,7 +102,7 @@ object MaliVenus {
         val guest = icd.parentFile!!
         return listOf(
             LinuxVulkanDriver.ENV + "=" + icd.absolutePath,
-            "VN_DEBUG=vtest",
+            "VN_DEBUG=vtest,init",
             "VTEST_SOCKET_NAME=" + socket(context).absolutePath,
             // Venus over vtest cannot import a dma-buf, so a window's buffers cannot be handed to
             // Xwayland or gamescope by DRI3. Mesa's software present copies them instead.

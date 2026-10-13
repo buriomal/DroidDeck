@@ -26,6 +26,8 @@ import java.util.ArrayList;
 public class VenusServerComponent extends SessionPart {
     private static final String TAG = "VenusServer";
     public static final String BINARY = "libvirgl_test_server.so";
+    /** Venus runs in virglrenderer's render server, a second program the vtest server execs. */
+    public static final String RENDER_SERVER = "libvirgl_render_server.so";
 
     private final File socketPath;
     private final File logFile;
@@ -58,6 +60,8 @@ public class VenusServerComponent extends SessionPart {
         ArrayList<String> env = new ArrayList<>();
         env.add("HOME=" + app().getFilesDir());
         env.add("TMPDIR=" + app().getCacheDir());
+        // Built in, the path is the build machine's libexec; without the server every Venus context fails.
+        env.add("RENDER_SERVER_EXEC_PATH=" + new File(binary.getParentFile(), RENDER_SERVER).getAbsolutePath());
         PrintWriter out = null;
         if (logFile != null) {
             try {

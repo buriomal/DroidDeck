@@ -39,4 +39,4 @@ meson setup $W/epoxy-build libepoxy --cross-file $W/cross.txt --prefix=$P --libd
 ninja -C $W/epoxy-build install
 meson setup $W/vb . --cross-file $W/cross.txt --prefix=$P --libdir lib -Dvenus=true -Dplatforms=egl -Dtests=false
 ninja -C $W/vb install
-mkdir -p /work/out/android; cp -v $P/bin/virgl_test_server $P/lib/libvirglrenderer.so* $P/lib/libepoxy.so* /work/out/android/ 2>&1 | tail -5
+mkdir -p /work/out/android; cp -v $P/libexec/virgl_render_server $P/bin/virgl_test_server $P/lib/libvirglrenderer.so* $P/lib/libepoxy.so* /work/out/android/ 2>&1 | tail -5
