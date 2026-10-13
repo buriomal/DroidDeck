@@ -617,7 +617,7 @@ class SessionService : Service() {
         val panvkIcd = if (maliPath && MaliVenus.panvk()) MaliVenus.preparePanvk(this) else null
         val venusIcd = if (maliPath && panvkIcd == null) MaliVenus.prepare(this) else null
         if (panvkIcd != null) {
-            guest.addAll(MaliVenus.panvkGuestEnv(panvkIcd))
+            guest.addAll(MaliVenus.panvkGuestEnv(this, panvkIcd))
             Log.i(TAG, "gpu: no Adreno; guest Vulkan is PanVK on " + MaliVenus.MALI_DEVICE)
         } else if (venusIcd != null) {
             guest.addAll(MaliVenus.guestEnv(this, venusIcd))

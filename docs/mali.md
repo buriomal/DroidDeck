@@ -29,6 +29,9 @@ Linux side's Vulkan to the device's own driver instead:
   `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`. `/dev/mali0` is bound into the session as its render
   node, and `session.log` carries a `panvk probe` section listing the devices the loader found and
   whether one opened. `Download/droiddeck-mali` containing `venus` goes back to Venus.
+  PanVK lacks what DXVK requires in the same way: patch 0005 reports clip/cull distances and
+  multiViewport (the distances are dropped from shaders and only viewport 0 is drawn, an
+  approximation), and the Venus asset's `bcn_layer` is loaded in front of it for BC textures.
 
 All of it is wired in `gpu/MaliVenus.kt`. The guest half ships as `assets/mali/venus-guest.tzst`.
 

@@ -917,7 +917,7 @@ BUSCONF
     fi
     # A game that closed on Mali left nothing behind: Proton silences Wine and DXVK unless told
     # otherwise. Errors and warnings only, which cost next to nothing, reach the session log.
-    if [ "${BL_MALI:-}" = 1 ]; then
+    if [ "${BL_MALI:-}" = 1 ] || [ -n "${BL_MALI_PANVK:-}" ]; then
       : "${WINEDEBUG:=err+all,fixme-all}" "${DXVK_LOG_LEVEL:=warn}" "${VKD3D_DEBUG:=err}"
       export WINEDEBUG DXVK_LOG_LEVEL VKD3D_DEBUG
     fi

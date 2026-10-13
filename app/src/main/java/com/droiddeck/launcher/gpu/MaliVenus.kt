@@ -41,7 +41,7 @@ object MaliVenus {
     const val MALI_DEVICE = "/dev/mali0"
     private const val PANVK_ASSET = "mali/panvk-guest.tzst"
     /** Bumped with the asset. */
-    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck4"
+    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck5"
     const val PANVK_LIB = "libvulkan_panfrost.so"
     private const val PROBE = "droiddeck-vkprobe"
 
@@ -96,15 +96,25 @@ object MaliVenus {
         return icd
     }
 
-    fun panvkGuestEnv(icd: File): List<String> = listOf(
-        LinuxVulkanDriver.ENV + "=" + icd.absolutePath,
-        // Mesa refuses v14 (the G1 series) without it: "panvk is not well-tested on v14".
-        "PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1",
-        // Read by the session script: log what the loader finds before anything depends on it.
-        "BL_MALI_PANVK=" + File(icd.parentFile, PROBE).absolutePath,
-        // Which driver build this is, in the log: two test APKs once looked the same from outside.
-        "BL_MALI_PANVK_BUILD=$PANVK_VERSION",
-    )
+    /**
+     * The guest environment for a PanVK session. PanVK has no BC texture formats either, so the
+     * Venus asset's bcn_layer goes in front of it the same way (unpacked by [prepare]).
+     */
+    fun panvkGuestEnv(context: Context, icd: File): List<String> {
+        val layerGuest = prepare(context)?.parentFile
+        return listOf(
+            LinuxVulkanDriver.ENV + "=" + icd.absolutePath,
+            // Mesa refuses v14 (the G1 series) without it: "panvk is not well-tested on v14".
+            "PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1",
+            // Read by the session script: log what the loader finds before anything depends on it.
+            "BL_MALI_PANVK=" + File(icd.parentFile, PROBE).absolutePath,
+            // Which driver build this is, in the log: two test APKs once looked the same from outside.
+            "BL_MALI_PANVK_BUILD=$PANVK_VERSION",
+        ) + if (layerGuest != null && File(layerGuest, LAYER_LIB).isFile) listOf(
+            "VK_ADD_IMPLICIT_LAYER_PATH=" + File(layerGuest, "implicit_layer.d").absolutePath,
+            "ENABLE_BCN_COMPUTE=1",
+        ) else emptyList()
+    }
 
     fun dir(context: Context): File = File(context.filesDir, "mali_venus")
 

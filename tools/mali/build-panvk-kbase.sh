@@ -8,7 +8,7 @@
 # aarch64-linux-gnu-gcc -I<src>/include and packed with the driver into assets/mali/panvk-guest.tzst.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-cp /ca.crt /usr/local/share/ca-certificates/ccr.crt && update-ca-certificates >/dev/null
+mkdir -p /etc/ssl/certs && cat /ca.crt >> /etc/ssl/certs/ca-certificates.crt
 [ -n "${APT_PROXY:-}" ] && echo "Acquire::https::Proxy \"$APT_PROXY\";" > /etc/apt/apt.conf.d/proxy
 dpkg --add-architecture arm64
 cat > /etc/apt/sources.list.d/ubuntu.sources <<X

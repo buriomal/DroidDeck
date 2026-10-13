@@ -48,8 +48,9 @@ int main(void)
              drv.driverName, drv.driverInfo, p.properties.vendorID, p.properties.deviceID);
       VkPhysicalDeviceFeatures f;
       vkGetPhysicalDeviceFeatures(devs[i], &f);
-      printf("  geometryShader=%u tessellationShader=%u textureCompressionBC=%u shaderClipDistance=%u depthClamp=%u\n",
-             f.geometryShader, f.tessellationShader, f.textureCompressionBC, f.shaderClipDistance, f.depthClamp);
+      printf("  geometryShader=%u tessellationShader=%u textureCompressionBC=%u shaderClipDistance=%u shaderCullDistance=%u multiViewport=%u depthClamp=%u\n",
+             f.geometryShader, f.tessellationShader, f.textureCompressionBC, f.shaderClipDistance,
+             f.shaderCullDistance, f.multiViewport, f.depthClamp);
       uint32_t ne = 0;
       vkEnumerateDeviceExtensionProperties(devs[i], NULL, &ne, NULL);
       printf("  device extensions: %u\n", ne);

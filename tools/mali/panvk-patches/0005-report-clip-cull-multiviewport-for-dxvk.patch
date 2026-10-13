@@ -1,0 +1,123 @@
+Report clip/cull distances and multiViewport for DXVK
+
+DXVK refuses a device without them, so D3D11 games stop with
+"DX11 feature level 10.0 is required". Mali has no clip/cull distances;
+the shader variables are demoted to temporaries and only viewport 0 is
+drawn.
+
+diff --git a/src/panfrost/vulkan/panvk_vX_physical_device.c b/src/panfrost/vulkan/panvk_vX_physical_device.c
+index 6f8062ef02d..310b7b82168 100644
+--- a/src/panfrost/vulkan/panvk_vX_physical_device.c
++++ b/src/panfrost/vulkan/panvk_vX_physical_device.c
+@@ -326,7 +326,8 @@ panvk_per_arch(get_physical_device_features)(
+       .wideLines = true,
+       .largePoints = true,
+       .alphaToOne = false,
+-      .multiViewport = false,
++      /* Reported for DXVK, which requires it; one viewport is drawn. */
++      .multiViewport = true,
+       .samplerAnisotropy = true,
+       .textureCompressionETC2 = has_texture_compression_etc2(device),
+       .textureCompressionASTC_LDR = has_texture_compression_astc_ldr(device),
+@@ -349,8 +350,9 @@ panvk_per_arch(get_physical_device_features)(
+       .shaderSampledImageArrayDynamicIndexing = true,
+       .shaderStorageBufferArrayDynamicIndexing = true,
+       .shaderStorageImageArrayDynamicIndexing = true,
+-      .shaderClipDistance = false,
+-      .shaderCullDistance = false,
++      /* Reported for DXVK; the distances are dropped (panvk_vX_shader.c). */
++      .shaderClipDistance = true,
++      .shaderCullDistance = true,
+       .shaderFloat64 = false,
+       .shaderInt64 = true,
+       .shaderInt16 = true,
+@@ -966,7 +968,7 @@ panvk_per_arch(get_physical_device_properties)(
+       .maxDrawIndirectCount = PAN_ARCH >= 10 ? UINT32_MAX : 1,
+       .maxSamplerLodBias = (float)INT16_MAX / 256.0f,
+       .maxSamplerAnisotropy = 16,
+-      .maxViewports = 1,
++      .maxViewports = 16,
+       .maxViewportDimensions = {MAX_FRAMEBUFFER_DIMENSION, MAX_FRAMEBUFFER_DIMENSION},
+       .viewportBoundsRange = {-2.0f * MAX_FRAMEBUFFER_DIMENSION, 2.0f * MAX_FRAMEBUFFER_DIMENSION - 1.0f},
+       .viewportSubPixelBits = 0,
+@@ -1004,9 +1006,9 @@ panvk_per_arch(get_physical_device_properties)(
+          PAN_ARCH >= 10 && device->kmod.dev->props.gpu_can_query_timestamp,
+       .timestampPeriod =
+          PAN_ARCH >= 10 ? panvk_get_gpu_system_timestamp_period(device) : 0,
+-      .maxClipDistances = 0,
+-      .maxCullDistances = 0,
+-      .maxCombinedClipAndCullDistances = 0,
++      .maxClipDistances = 8,
++      .maxCullDistances = 8,
++      .maxCombinedClipAndCullDistances = 8,
+       .discreteQueuePriorities = 2,
+       .pointSizeRange = {pointSizeRangeMin, pointSizeRangeMax},
+       .lineWidthRange = {0.0, 7.9921875},
+diff --git a/src/panfrost/vulkan/panvk_vX_shader.c b/src/panfrost/vulkan/panvk_vX_shader.c
+index ec4df409ddb..9c93c57e1a5 100644
+--- a/src/panfrost/vulkan/panvk_vX_shader.c
++++ b/src/panfrost/vulkan/panvk_vX_shader.c
+@@ -626,6 +626,53 @@ panvk_get_spirv_options(UNUSED struct vk_physical_device *vk_pdev,
+    };
+ }
+ 
++/* Mali has no clip or cull distances. DXVK refuses a device without them
++ * (and D3D11 games then stop with "DX11 feature level 10.0 is required"),
++ * while games rarely write SV_ClipDistance/SV_CullDistance. The features
++ * are reported and the variables demoted to temporaries here, so a shader
++ * that writes them compiles and draws unclipped instead of failing. The
++ * viewport index goes the same way, as only viewport 0 is drawn.
++ * TODO: lower clip distances to a fragment-shader discard. */
++static bool
++panvk_drop_clip_cull_vars(nir_shader *nir)
++{
++   bool progress = false;
++
++   nir_foreach_variable_with_modes(var, nir,
++                                   nir_var_shader_in | nir_var_shader_out) {
++      if (nir->info.stage == MESA_SHADER_FRAGMENT &&
++          var->data.mode == nir_var_shader_out)
++         continue;
++      switch (var->data.location) {
++      case VARYING_SLOT_CLIP_DIST0:
++      case VARYING_SLOT_CLIP_DIST1:
++      case VARYING_SLOT_CULL_DIST0:
++      case VARYING_SLOT_CULL_DIST1:
++      case VARYING_SLOT_VIEWPORT:
++         var->data.mode = nir_var_shader_temp;
++         var->data.compact = false;
++         progress = true;
++         break;
++      default:
++         break;
++      }
++   }
++
++   if (progress) {
++      const uint64_t bits = VARYING_BIT_CLIP_DIST0 | VARYING_BIT_CLIP_DIST1 |
++                            VARYING_BIT_CULL_DIST0 | VARYING_BIT_CULL_DIST1 |
++                            VARYING_BIT_VIEWPORT;
++      nir_fixup_deref_modes(nir);
++      nir->info.clip_distance_array_size = 0;
++      nir->info.cull_distance_array_size = 0;
++      if (nir->info.stage != MESA_SHADER_FRAGMENT)
++         nir->info.outputs_written &= ~bits;
++      if (nir->info.stage != MESA_SHADER_VERTEX)
++         nir->info.inputs_read &= ~bits;
++   }
++   return progress;
++}
++
+ static void
+ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
+                      nir_shader *nir,
+@@ -633,6 +680,9 @@ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
+ {
+    struct panvk_physical_device *pdev = to_panvk_physical_device(vk_pdev);
+ 
++   if (nir->info.stage != MESA_SHADER_COMPUTE)
++      NIR_PASS(_, nir, panvk_drop_clip_cull_vars);
++
+    /* Ensure to regroup output variables at the same location */
+    if (nir->info.stage == MESA_SHADER_FRAGMENT)
+       NIR_PASS(_, nir, nir_opt_vectorize_io_vars, nir_var_shader_out);
