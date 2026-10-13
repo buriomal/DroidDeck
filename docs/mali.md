@@ -23,7 +23,8 @@ All of it is wired in `gpu/MaliVenus.kt`. The guest half ships as `assets/mali/v
 
 - `Download/droiddeck-venus`: `on` forces the Venus path on an Adreno, `off` turns it off on a Mali.
 - `Download/droiddeck-env` lines override the session's environment, e.g.
-  `BL_MALI_CEF_GPU=1` (try the client's GPU interface), `MESA_VK_WSI_DEBUG=` (try hardware present),
+  `BL_MALI_CEF_GPU=1` (try the client's GPU interface), `BL_MALI_GL=zink` (the client's GL windows
+  through Zink on Venus instead of llvmpipe), `MESA_VK_WSI_DEBUG=` (try hardware present),
   `DISABLE_BCN_COMPUTE=1` (no BC layer), `VN_DEBUG=vtest,init` (more Venus logging).
 
 ## Logs

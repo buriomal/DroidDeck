@@ -888,6 +888,14 @@ BUSCONF
       _bl_cef=(-cef-disable-gpu)
       echo "== steam: no Adreno, client interface in software"
     fi
+    # The client's own GL windows (the updater, the main window) went through Zink on Venus and
+    # the client aborted right after creating its first window there. llvmpipe draws them on the
+    # CPU, as in the desktop session. BL_MALI_GL=zink in Download/droiddeck-env goes back to Zink.
+    if [ "${BL_MALI:-}" = 1 ] && [ "${BL_MALI_GL:-}" != zink ]; then
+      export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe
+      unset MESA_LOADER_DRIVER_OVERRIDE LIBGL_KOPPER_DRI2
+      echo "== steam: no Adreno, client GL in software (llvmpipe)"
+    fi
     if [ "${BL_DESKTOP:-}" = 1 ] && [ "${BL_STEAM_UI:-}" = desktop ]; then
       # KDE uses QPainter/shm on Android. CEF's Vulkan buffers cannot be
       # presented there; its software path keeps the library and dialogs on KDE.
