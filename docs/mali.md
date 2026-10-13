@@ -8,9 +8,10 @@ Linux side's Vulkan to the device's own driver instead:
 - **Guest Vulkan**: Mesa 26.2.3's Venus ICD (`libvulkan_virtio.so`, glibc aarch64) talks vtest over
   `files/mali_venus/vtest.sock`. `VenusServerComponent` runs virglrenderer 1.3.0's
   `virgl_test_server --venus` on the Android side (`libvirgl_test_server.so`), which replays the calls
-  on `libvulkan.so`. Memory crosses as dma-bufs the driver exports itself. termux's
-  virglrenderer-android patches are applied except 0011, whose AHardwareBuffer blobs suit Adreno's
-  Android driver but on Mali left the first blob the guest asked for unexportable.
+  on `libvulkan.so`. Mali imports dma-bufs but cannot export them, so the server allocates
+  shared memory from `/dev/dma_heap/system` (or gralloc, as a BLOB AHardwareBuffer) and has the
+  driver import it (`tools/mali/virgl-android-dmabuf.patch`). termux's virglrenderer-android patches
+  are applied except 0010 and 0011.
 - **BC textures**: Mali has none and DXVK/vkd3d-proton require them, so leegao's `bcn_layer` sits in
   front of Venus as an implicit layer and decodes them with compute shaders.
 - **Present**: Venus over vtest cannot import dma-bufs, so windows present through Mesa's software

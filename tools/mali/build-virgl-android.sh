@@ -10,13 +10,14 @@ tar xf /work/src/virglrenderer_1.3.0.orig.tar.bz2
 SRC=$(ls -d virglrenderer*/ | head -1); SRC=$W/${SRC%/}
 cp -r /work/src/libepoxy $SRC/libepoxy
 cd $SRC
-# 0010 clashes with NDK 27's libc. 0011 swaps dma_buf for AHardwareBuffer blobs, which Adreno's Android
-# driver needs but Mali does not: Mali exports dma-bufs itself, and with 0011 the first blob the guest
-# asked for failed on the 17T Pro (venus.log: resource_create_blob failed).
+# 0010 clashes with NDK 27's libc. 0011 swaps dma_buf for AHardwareBuffer imports, which Adreno's
+# Android driver needs; on Mali the guest's first blob failed with it (17T Pro, venus.log).
 for p in $(ls /work/src/tp/packages/virglrenderer-android/*.patch.beforehostbuild | grep -Ev '0010|0011'); do
   sed "s|@TERMUX_PREFIX@|/data/data/com.droiddeck.launcher/files/usr|g" "$p" > /tmp/p.patch
   echo "== $(basename $p)"; patch -p1 --forward < /tmp/p.patch || patch -p0 --forward < /tmp/p.patch
 done
+# Mali imports dma-bufs but cannot export them: allocate them outside the driver instead (no gbm on Android).
+patch -p1 < /work/scripts/virgl-android-dmabuf.patch
 cat > $W/cross.txt <<X
 [binaries]
 c = '$TC/bin/aarch64-linux-android$API-clang'
