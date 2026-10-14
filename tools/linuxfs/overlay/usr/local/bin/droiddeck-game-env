@@ -371,22 +371,7 @@ def main():
         # out black. Decoding into a buffer and copying it in works for every format.
         env.setdefault("BCN_COMPUTE_IMAGE_VIEW", "0")
         env.setdefault("PANVK_DXVK_FEATURES", "1")
-        # Octopath drew black while DXVK's own HUD, which never uses pipeline libraries, showed:
-        # PanVK's graphics pipeline library path is the suspect, so DXVK links full pipelines.
-        # The HUD's draw and pipeline counters show whether the game's draws run.
-        if "enableGraphicsPipelineLibrary" not in env.get("DXVK_CONFIG", ""):
-            own = env.get("DXVK_CONFIG", "").strip().rstrip(";").strip()
-            gpl = "dxvk.enableGraphicsPipelineLibrary = False"
-            env["DXVK_CONFIG"] = own + "; " + gpl if own else gpl
-        env.setdefault("DXVK_HUD", "fps,drawcalls,pipelines")
-        # Still black with startup movies skipped, while the HUD drawn straight into the swapchain
-        # shows: the game's frames go through its 10-bit back buffer, which PanVK compresses
-        # (AFBC). Keep game images uncompressed.
-        debug = [f for f in env.get("PANVK_DEBUG", "").split(",") if f]
-        if "noafbc" not in debug:
-            env["PANVK_DEBUG"] = ",".join(debug + ["noafbc"])
-        # Octopath kept drawing the same ~40 calls a frame on a black screen with no new
-        # pipelines: an Unreal startup movie that never decodes. Skip startup movies.
+        # Unreal startup movies only delay the game on PanVK; skip them.
         if len(command) > 2 and command[1] == "waitforexitandrun" and is_unreal(command[2]) \
                 and "-nostartupmovies" not in command:
             command = command + ["-nostartupmovies"]
