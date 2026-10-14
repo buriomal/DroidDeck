@@ -361,6 +361,10 @@ def main():
     if env.get("BL_BCN_GAMES") == "1":
         if "DISABLE_BCN_COMPUTE" not in env:
             env["ENABLE_BCN_COMPUTE"] = "1"
+        # The layer's default decodes straight into the texture through a storage view, which for
+        # sRGB textures is an sRGB storage image - not a storage format; on PanVK the textures came
+        # out black. Decoding into a buffer and copying it in works for every format.
+        env.setdefault("BCN_COMPUTE_IMAGE_VIEW", "0")
         env.setdefault("PANVK_DXVK_FEATURES", "1")
         # Octopath drew black while DXVK's own HUD, which never uses pipeline libraries, showed:
         # PanVK's graphics pipeline library path is the suspect, so DXVK links full pipelines.
