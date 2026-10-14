@@ -1,5 +1,6 @@
 #!/bin/bash
-# Cross-builds leegao/bcn_layer (with tools/mali/bcn-layer-khr-aliases.patch applied) for the
+# Cross-builds leegao/bcn_layer (with tools/mali/bcn-layer-khr-aliases.patch and
+# tools/mali/bcn-layer-staging-pool.patch applied) for the
 # aarch64 glibc runtime, in ubuntu:25.10.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive

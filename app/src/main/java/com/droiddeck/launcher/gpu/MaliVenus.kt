@@ -33,7 +33,7 @@ object MaliVenus {
     private const val TAG = "MaliVenus"
     private const val ASSET = "mali/venus-guest.tzst"
     /** Bumped with the asset, so an app update replaces the unpacked copy. */
-    private const val VERSION = "mesa-26.2.3-venus-vtest2+bcn_layer-50993a2d-khr"
+    private const val VERSION = "mesa-26.2.3-venus-vtest2+bcn_layer-50993a2d-khr-pool"
     private const val OVERRIDE_FILE = "Download/droiddeck-venus"
     const val ICD_LIB = "libvulkan_virtio.so"
     const val LAYER_LIB = "libbcn_layer.so"
@@ -41,7 +41,7 @@ object MaliVenus {
     const val MALI_DEVICE = "/dev/mali0"
     private const val PANVK_ASSET = "mali/panvk-guest.tzst"
     /** Bumped with the asset. */
-    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck11"
+    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck12"
     const val PANVK_LIB = "libvulkan_panfrost.so"
     private const val PROBE = "droiddeck-vkprobe"
 

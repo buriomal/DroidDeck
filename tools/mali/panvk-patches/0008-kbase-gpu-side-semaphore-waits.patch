@@ -1,0 +1,217 @@
+kbase: wait for semaphores on the GPU where possible
+
+Waits on this device's own work become CQS waits in the ring even when
+the submit also waits on something else (only that is waited on the
+CPU), shared cells are merged, reached or signaled waits are dropped,
+and a wait-only submit waiting on its own queue doesn't wait at all.
+
+--- a/src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c
++++ b/src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c
+@@ -22,6 +22,7 @@
+ 
+ #include "util/bitscan.h"
+ #include "util/os_time.h"
++#include "util/stack_array.h"
+ #include "vk_drm_syncobj.h"
+ #include "vk_log.h"
+ #include "vk_sync.h"
+@@ -2772,23 +2773,30 @@
+    return vk_errorf(vk_device,r,"kbase real sync_file export failed: %s",strerror(e));
+ }
+ 
+-/* SYNC-A3 test-only collector.
++/* Split a submit's semaphore waits by how they can be met.
+  *
+- * Only payloads created by panvk_queue_submit_process_signals_kbase() are
+- * eligible: both callbacks must match the internal queue-target functions.
+- * Imported sync_file payloads, timeline wrappers, mixed wait sets, wait-only
+- * submits and oversized wait sets fall back to the unchanged CPU/KCPU bridge.
++ * Waits on work this device queued (payloads set by
++ * panvk_queue_submit_process_signals_kbase()) become CQS waits in the ring,
++ * so the GPU waits and the submitting thread doesn't.  Cells already reached
++ * are dropped and cells shared by several waits merged to the highest target,
++ * so the GPU wait list stays within KBASE_GPU_WAIT_MAX.  Waits that are
++ * already signaled are dropped.  Everything else (imported sync_files, waits
++ * that don't fit) is returned in cpu_waits and waited on the CPU, as before.
++ * A submit with no stream of its own (wait-only, e.g. the BCn layer's
++ * staging fence) signals this queue's seqnos as they stand, so a wait on
++ * earlier work of this same queue is met by those already and is dropped;
++ * any other wait in it is still met on the CPU.
+  */
+-static bool
++static void
+ kbase_collect_internal_gpu_waits(
+    struct panvk_queue_submit *submit, const struct vk_queue_submit *vk_submit,
+-   struct kbase_gpu_wait waits[KBASE_GPU_WAIT_MAX], uint32_t *wait_count)
++   struct kbase_gpu_wait waits[KBASE_GPU_WAIT_MAX], uint32_t *wait_count,
++   struct vk_sync_wait *cpu_waits, uint32_t *cpu_wait_count)
+ {
+-   *wait_count = 0;
++   struct panvk_device *dev = submit->dev;
+ 
+-   if (!debug_get_bool_option("PANVK_KBASE_GPU_INTERNAL_WAITS", true) ||
+-       !vk_submit->wait_count || !vk_submit->command_buffer_count)
+-      return false;
++   *wait_count = 0;
++   *cpu_wait_count = 0;
+ 
+    bool has_stream = false;
+    for (uint32_t i = 0; i < submit->qsubmit_count; i++) {
+@@ -2797,37 +2805,70 @@
+          break;
+       }
+    }
+-   if (!has_stream)
+-      return false;
++   bool gpu_ok = has_stream &&
++      debug_get_bool_option("PANVK_KBASE_GPU_INTERNAL_WAITS", true);
+ 
+    for (uint32_t w = 0; w < vk_submit->wait_count; w++) {
+       struct panvk_kbase_sync_pending_payload payload;
+       memset(&payload, 0, sizeof(payload));
+ 
+-      if (!panvk_kbase_sync_get_pending_payload(vk_submit->waits[w].sync,
+-                                                 &payload) ||
+-          payload.wait != kbase_wait_sync_targets ||
+-          payload.export_sync_file != kbase_export_sync_targets ||
+-          payload.data == NULL)
+-         return false;
+-
+-      struct panvk_gpu_queue *producer = payload.data;
+-      for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
+-         if (!payload.targets[i])
+-            continue;
++      bool internal =
++         panvk_kbase_sync_get_pending_payload(vk_submit->waits[w].sync,
++                                              &payload) &&
++         payload.wait == kbase_wait_sync_targets &&
++         payload.export_sync_file == kbase_export_sync_targets &&
++         payload.data != NULL;
+ 
+-         if (*wait_count >= KBASE_GPU_WAIT_MAX)
+-            return false;
++      if (internal && !has_stream && payload.data == submit->queue)
++         continue;
+ 
+-         waits[*wait_count] = (struct kbase_gpu_wait) {
+-            .addr = kbase_subqueue_seqno_dev_addr(producer, i),
+-            .target_minus_one = payload.targets[i] - 1,
+-         };
+-         (*wait_count)++;
++      if (internal && gpu_ok) {
++         struct panvk_gpu_queue *producer = payload.data;
++         struct kbase_gpu_wait merged[KBASE_GPU_WAIT_MAX];
++         uint32_t merged_count = *wait_count;
++         bool fits = true;
++
++         memcpy(merged, waits, sizeof(merged[0]) * merged_count);
++         for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT && fits; i++) {
++            if (!payload.targets[i] ||
++                kbase_subqueue_seqno_cell(producer, i)->seqno >=
++                   payload.targets[i])
++               continue;
++
++            uint64_t addr = kbase_subqueue_seqno_dev_addr(producer, i);
++            uint32_t c;
++            for (c = 0; c < merged_count; c++) {
++               if (merged[c].addr == addr)
++                  break;
++            }
++            if (c < merged_count) {
++               merged[c].target_minus_one =
++                  MAX2(merged[c].target_minus_one, payload.targets[i] - 1);
++            } else if (merged_count < KBASE_GPU_WAIT_MAX) {
++               merged[merged_count++] = (struct kbase_gpu_wait) {
++                  .addr = addr,
++                  .target_minus_one = payload.targets[i] - 1,
++               };
++            } else {
++               fits = false;
++            }
++         }
++
++         if (fits) {
++            memcpy(waits, merged, sizeof(merged[0]) * merged_count);
++            *wait_count = merged_count;
++            continue;
++         }
+       }
+-   }
+ 
+-   return *wait_count != 0;
++      /* Already signaled: nothing to wait for. */
++      if (vk_sync_wait(&dev->vk, vk_submit->waits[w].sync,
++                       vk_submit->waits[w].wait_value,
++                       VK_SYNC_WAIT_COMPLETE, 0) == VK_SUCCESS)
++         continue;
++
++      cpu_waits[(*cpu_wait_count)++] = vk_submit->waits[w];
++   }
+ }
+ 
+ /* Incoming CPU syncs are resolved before emission.  The new work itself is
+@@ -2838,7 +2879,7 @@
+  * neither the CPU nor the GPU busy shows up as time in these. */
+ static struct {
+    int64_t since;
+-   uint32_t submits, cpu_waits, renewals, renewals_deferred;
++   uint32_t submits, cpu_waits, gpu_waits, renewals, renewals_deferred;
+    int64_t cpu_wait_ns, renew_ns, sync_ns;
+ } kbase_submit_stats;
+ 
+@@ -2854,10 +2895,11 @@
+    if (span < 10000000000ll)
+       return;
+    mesa_logi("kbase: submit stats %.1f s: %u submits, %u semaphore waits on the CPU "
+-             "%.0f ms, %u tiler heap renewals (%u deferred, %.0f ms), "
++             "%.0f ms, %u on the GPU, %u tiler heap renewals (%u deferred, %.0f ms), "
+              "forced syncs %.0f ms",
+              span / 1e9, kbase_submit_stats.submits, kbase_submit_stats.cpu_waits,
+-             kbase_submit_stats.cpu_wait_ns / 1e6, kbase_submit_stats.renewals,
++             kbase_submit_stats.cpu_wait_ns / 1e6, kbase_submit_stats.gpu_waits,
++             kbase_submit_stats.renewals,
+              kbase_submit_stats.renewals_deferred, kbase_submit_stats.renew_ns / 1e6,
+              kbase_submit_stats.sync_ns / 1e6);
+    memset(&kbase_submit_stats, 0, sizeof(kbase_submit_stats));
+@@ -2893,27 +2935,28 @@
+    // }
+ 
+    struct kbase_gpu_wait gpu_waits[KBASE_GPU_WAIT_MAX];
+-   uint32_t gpu_wait_count = 0;
+-   bool native_gpu_waits =
+-      kbase_collect_internal_gpu_waits(submit, vk_submit, gpu_waits,
+-                                       &gpu_wait_count);
++   uint32_t gpu_wait_count = 0, cpu_wait_count = 0;
++   STACK_ARRAY(struct vk_sync_wait, cpu_waits, vk_submit->wait_count);
++   kbase_collect_internal_gpu_waits(submit, vk_submit, gpu_waits,
++                                    &gpu_wait_count, cpu_waits,
++                                    &cpu_wait_count);
++   bool native_gpu_waits = gpu_wait_count != 0;
+ 
+    kbase_submit_stats_report();
+    kbase_submit_stats.submits++;
+-   if (vk_submit->wait_count && !native_gpu_waits) {
++   kbase_submit_stats.gpu_waits += gpu_wait_count;
++   if (cpu_wait_count) {
+       int64_t t0 = os_time_get_nano();
+-      result = vk_sync_wait_many(&dev->vk, vk_submit->wait_count,
+-                                 vk_submit->waits, VK_SYNC_WAIT_COMPLETE,
+-                                 UINT64_MAX);
++      result = vk_sync_wait_many(&dev->vk, cpu_wait_count, cpu_waits,
++                                 VK_SYNC_WAIT_COMPLETE, UINT64_MAX);
+       kbase_submit_stats.cpu_waits++;
+       kbase_submit_stats.cpu_wait_ns += os_time_get_nano() - t0;
+-      if (result != VK_SUCCESS)
++      if (result != VK_SUCCESS) {
++         STACK_ARRAY_FINISH(cpu_waits);
+          return result;
++      }
+    }
+-
+-   if (native_gpu_waits)
+-      mesa_logi("kbase: SYNC-A3 native GPU internal wait path active (%u cells)",
+-                gpu_wait_count);
++   STACK_ARRAY_FINISH(cpu_waits);
+ 
+    /* Flush pending synchronization requests before submitting the job, to
+     * make sure things are GPU-visible. */

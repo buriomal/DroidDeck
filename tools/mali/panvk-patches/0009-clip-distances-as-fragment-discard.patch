@@ -1,0 +1,169 @@
+Clip distances as a fragment-shader discard in linked pipelines
+
+--- a/src/panfrost/vulkan/panvk_vX_shader.c
++++ b/src/panfrost/vulkan/panvk_vX_shader.c
+@@ -628,14 +628,16 @@
+ }
+ 
+ /* Mali has no clip or cull distances. DXVK refuses a device without them
+- * (and D3D11 games then stop with "DX11 feature level 10.0 is required"),
+- * while games rarely write SV_ClipDistance/SV_CullDistance. The features
+- * are reported and the variables demoted to temporaries here, so a shader
+- * that writes them compiles and draws unclipped instead of failing. The
+- * viewport index goes the same way, as only viewport 0 is drawn.
+- * TODO: lower clip distances to a fragment-shader discard. */
++ * (and D3D11 games then stop with "DX11 feature level 10.0 is required").
++ * The features are reported and the variables demoted to temporaries here,
++ * so a shader that writes them compiles instead of failing. Clip distance
++ * outputs of geometry stages are kept (keep_clip_out) as vec4s until
++ * panvk_link_clip_distances() knows whether a fragment shader compiled
++ * with them will discard on them. Cull distances are dropped (the
++ * primitive is drawn) and so is the viewport index, as only viewport 0 is
++ * drawn. */
+ static bool
+-panvk_drop_clip_cull_vars(nir_shader *nir)
++panvk_drop_clip_cull_vars_mode(nir_shader *nir, bool keep_clip_out)
+ {
+    bool progress = false;
+ 
+@@ -653,6 +655,9 @@
+       switch (var->data.location) {
+       case VARYING_SLOT_CLIP_DIST0:
+       case VARYING_SLOT_CLIP_DIST1:
++         if (keep_clip_out && var->data.mode == nir_var_shader_out)
++            break;
++         FALLTHROUGH;
+       case VARYING_SLOT_CULL_DIST0:
+       case VARYING_SLOT_CULL_DIST1:
+       case VARYING_SLOT_VIEWPORT:
+@@ -666,20 +671,99 @@
+    }
+ 
+    if (progress) {
+-      const uint64_t bits = VARYING_BIT_CLIP_DIST0 | VARYING_BIT_CLIP_DIST1 |
+-                            VARYING_BIT_CULL_DIST0 | VARYING_BIT_CULL_DIST1 |
++      const uint64_t clip = VARYING_BIT_CLIP_DIST0 | VARYING_BIT_CLIP_DIST1;
++      const uint64_t bits = VARYING_BIT_CULL_DIST0 | VARYING_BIT_CULL_DIST1 |
+                             VARYING_BIT_VIEWPORT;
+       nir_fixup_deref_modes(nir);
+-      nir->info.clip_distance_array_size = 0;
+       nir->info.cull_distance_array_size = 0;
++      if (!keep_clip_out)
++         nir->info.clip_distance_array_size = 0;
+       if (nir->info.stage != MESA_SHADER_FRAGMENT)
+-         nir->info.outputs_written &= ~bits;
++         nir->info.outputs_written &= ~(bits | (keep_clip_out ? 0 : clip));
+       if (nir->info.stage != MESA_SHADER_VERTEX)
+-         nir->info.inputs_read &= ~bits;
++         nir->info.inputs_read &= ~(bits | clip);
+    }
+    return progress;
+ }
+ 
++static bool
++panvk_drop_clip_cull_vars(nir_shader *nir)
++{
++   return panvk_drop_clip_cull_vars_mode(nir, false);
++}
++
++/* Number of clip distances a geometry stage still writes (kept by
++ * panvk_drop_clip_cull_vars_mode() as vec4s at CLIP_DIST0/1). */
++static unsigned
++panvk_clip_distance_count(nir_shader *nir)
++{
++   unsigned count = 0;
++
++   nir_foreach_shader_out_variable(var, nir) {
++      if (var->data.location == VARYING_SLOT_CLIP_DIST0 ||
++          var->data.location == VARYING_SLOT_CLIP_DIST1) {
++         unsigned base = var->data.location == VARYING_SLOT_CLIP_DIST1 ? 4 : 0;
++         count = MAX2(count, base + glsl_count_attribute_slots(var->type, false) * 4);
++      }
++   }
++   return MIN2(MIN2(count, nir->info.clip_distance_array_size ?
++                              nir->info.clip_distance_array_size : count), 8);
++}
++
++/* Clip distances as a fragment-shader discard, the way GL drivers for
++ * hardware without clip planes do it: the vertex shader passes the
++ * distances on as varyings and the fragment shader kills the fragments
++ * where any is negative. Only where both are compiled together (a linked
++ * pipeline, or DXVK's optimized pipeline after its fast-linked one), as
++ * the fragment shader must know the vertex shader writes them; elsewhere
++ * the distances are dropped and the primitive drawn unclipped, as before. */
++static void
++panvk_link_clip_distances(struct vk_shader_compile_info *infos,
++                          uint32_t shader_count)
++{
++   for (uint32_t i = 0; i < shader_count; i++) {
++      nir_shader *nir = infos[i].nir;
++      if (nir->info.stage == MESA_SHADER_FRAGMENT ||
++          nir->info.stage == MESA_SHADER_COMPUTE)
++         continue;
++
++      unsigned count = panvk_clip_distance_count(nir);
++      bool linked = nir->info.stage == MESA_SHADER_VERTEX &&
++                    i + 1 < shader_count &&
++                    infos[i + 1].nir->info.stage == MESA_SHADER_FRAGMENT &&
++                    infos[i].next_stage_mask == VK_SHADER_STAGE_FRAGMENT_BIT;
++
++      if (!count || !linked) {
++         if (count)
++            NIR_PASS(_, nir, panvk_drop_clip_cull_vars);
++         continue;
++      }
++
++      nir_shader *fs = infos[i + 1].nir;
++      nir_variable *in = nir_variable_create(
++         fs, nir_var_shader_in,
++         count > 4 ? glsl_array_type(glsl_vec4_type(), 2, 0) : glsl_vec4_type(),
++         "clip_distances");
++      in->data.location = VARYING_SLOT_CLIP_DIST0;
++      in->data.interpolation = INTERP_MODE_NONE;
++
++      nir_function_impl *impl = nir_shader_get_entrypoint(fs);
++      nir_builder b = nir_builder_at(nir_before_impl(impl));
++      nir_def *cond = NULL;
++      for (unsigned d = 0; d < count; d++) {
++         nir_deref_instr *deref = nir_build_deref_var(&b, in);
++         if (count > 4)
++            deref = nir_build_deref_array_imm(&b, deref, d / 4);
++         nir_def *v = nir_channel(&b, nir_load_deref(&b, deref), d % 4);
++         nir_def *neg = nir_flt_imm(&b, v, 0.0);
++         cond = cond ? nir_ior(&b, cond, neg) : neg;
++      }
++      nir_discard_if(&b, cond);
++      fs->info.fs.uses_discard = true;
++      nir_progress(true, impl, nir_metadata_none);
++   }
++}
++
+ static void
+ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
+                      nir_shader *nir,
+@@ -690,8 +774,13 @@
+    /* Only where the features are reported (PANVK_DXVK_FEATURES, see
+     * panvk_vX_physical_device.c): elsewhere shaders compile as they always did. */
+    if (nir->info.stage != MESA_SHADER_COMPUTE &&
+-       debug_get_bool_option("PANVK_DXVK_FEATURES", false))
+-      NIR_PASS(_, nir, panvk_drop_clip_cull_vars);
++       debug_get_bool_option("PANVK_DXVK_FEATURES", false)) {
++      bool keep_clip = nir->info.stage != MESA_SHADER_FRAGMENT &&
++                       debug_get_bool_option("PANVK_CLIP_DISCARD", true);
++      NIR_PASS(_, nir, panvk_drop_clip_cull_vars_mode, keep_clip);
++      if (keep_clip)
++         NIR_PASS(_, nir, nir_lower_clip_cull_distance_to_vec4s);
++   }
+ 
+    /* Ensure to regroup output variables at the same location */
+    if (nir->info.stage == MESA_SHADER_FRAGMENT)
+@@ -2610,6 +2699,9 @@
+       use_static_noperspective = true;
+    }
+ 
++   if (debug_get_bool_option("PANVK_DXVK_FEATURES", false))
++      panvk_link_clip_distances(infos, shader_count);
++
+    /* Vulkan runtime passes us shaders in stage order */
+    for (i = 0; i < shader_count; i++) {
+       const uint32_t *noperspective_varyings_ptr =

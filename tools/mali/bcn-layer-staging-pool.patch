@@ -1,0 +1,131 @@
+Reuse decode staging buffers
+
+Every texture upload allocated and later freed its own staging memory,
+a kernel round trip each way. Sizes are rounded up to a power of two and
+freed buffers kept (up to 96 MiB) for the next upload of that size.
+
+--- a/src/bcn_layer.hpp
++++ b/src/bcn_layer.hpp
+@@ -17,6 +17,7 @@
+ #include <cstring>
+ #include <thread>
+ #include <condition_variable>
++#include <map>
+ 
+ #undef VK_LAYER_EXPORT
+ #if defined(WIN32)
+@@ -133,6 +134,10 @@
+     std::atomic_bool stop_thread {false};
+     std::string dump_buffers_path;
+     bool has_more_layers = false;
++    // Decode staging buffers kept for reuse, by allocation size (see create_staging_buffer).
++    std::mutex stagingPoolLock;
++    std::multimap<VkDeviceSize, std::unique_ptr<struct buffer>> stagingPool;
++    VkDeviceSize stagingPoolBytes = 0;
+ };
+ 
+ struct device *get_device(VkDevice);
+--- a/src/buffer.hpp
++++ b/src/buffer.hpp
+@@ -22,6 +22,8 @@
+ };
+ 
+ struct buffer *find_buffer(VkBuffer);
++void release_staging_buffer(struct device *dev, std::unique_ptr<struct buffer> buf);
++void clear_staging_pool(struct device *dev);
+ std::unique_ptr<struct buffer> create_staging_buffer(struct device *dev, int size, VkFormat format, int width, int height, std::string_view label = "");
+ 
+ #endif
+--- a/src/buffer.cpp
++++ b/src/buffer.cpp
+@@ -25,6 +25,29 @@
+ 	// The descriptor buffer (VkBuffer 0xd2a0000000d2a) size is 64 bytes, 64 bytes were bound,
+ 	// and the highest out of bounds access was at [79] bytes
+ 	size = (size + align) & ~align;
++
++	// Every texture upload used to allocate (and later free) its own staging memory, a kernel
++	// round trip each way. Sizes are rounded up to a power of two and freed buffers kept for the
++	// next upload of that size (release_staging_buffer).
++	VkDeviceSize bucket = 4096;
++	while (bucket < (VkDeviceSize)size)
++		bucket <<= 1;
++	{
++		std::lock_guard<std::mutex> l(dev->stagingPoolLock);
++		auto it = dev->stagingPool.find(bucket);
++		if (it != dev->stagingPool.end()) {
++			auto staging_buf = std::move(it->second);
++			dev->stagingPool.erase(it);
++			dev->stagingPoolBytes -= staging_buf->size;
++			staging_buf->format = format;
++			staging_buf->label = label;
++			staging_buf->width = width;
++			staging_buf->height = height;
++			staging_buf->id = bufferIdCounter.fetch_add(1);
++			return staging_buf;
++		}
++	}
++	size = bucket;
+ 	VkBufferCreateInfo buffer_create_info = {
+ 		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+ 		.pNext = nullptr,
+@@ -81,6 +104,38 @@
+ 	return staging_buf;
+ }
+ 
++static const VkDeviceSize kStagingPoolMax = 96ull << 20;
++
++void
++release_staging_buffer(struct device *dev, std::unique_ptr<struct buffer> buf)
++{
++	if (!buf)
++		return;
++	if (!dev->stop_thread && buf->size <= kStagingPoolMax / 4) {
++		std::lock_guard<std::mutex> l(dev->stagingPoolLock);
++		if (dev->stagingPoolBytes + buf->size <= kStagingPoolMax) {
++			dev->stagingPoolBytes += buf->size;
++			VkDeviceSize size = buf->size;
++			dev->stagingPool.emplace(size, std::move(buf));
++			return;
++		}
++	}
++	dev->table.DestroyBuffer(dev->handle, buf->handle, buf->alloc);
++	dev->table.FreeMemory(dev->handle, buf->memory, buf->alloc);
++}
++
++void
++clear_staging_pool(struct device *dev)
++{
++	std::lock_guard<std::mutex> l(dev->stagingPoolLock);
++	for (auto &entry : dev->stagingPool) {
++		dev->table.DestroyBuffer(dev->handle, entry.second->handle, entry.second->alloc);
++		dev->table.FreeMemory(dev->handle, entry.second->memory, entry.second->alloc);
++	}
++	dev->stagingPool.clear();
++	dev->stagingPoolBytes = 0;
++}
++
+ struct buffer *
+ find_buffer(VkBuffer buffer)
+ {
+--- a/src/staging_resources.cpp
++++ b/src/staging_resources.cpp
+@@ -414,8 +414,7 @@
+             dev->table.UnmapMemory(device, buf->memory);
+         }
+ 
+-        dev->table.DestroyBuffer(device, buf->handle, buf->alloc);
+-        dev->table.FreeMemory(device, buf->memory, buf->alloc);
++        release_staging_buffer(dev, std::move(buf));
+     }
+ 
+     if (dev->debug_astc) {
+--- a/src/bcn_layer.cpp
++++ b/src/bcn_layer.cpp
+@@ -1117,6 +1117,7 @@
+ 		stagingResources->Cleanup();
+ 	}
+ 	dev->stagingResourcesQueue.clear();
++	clear_staging_pool(dev);
+ 	dev->syncPool.reset();
+ 	dev->descriptorSetAllocator->cleanup();
+ 	dev->descriptorSetAllocator.reset();
