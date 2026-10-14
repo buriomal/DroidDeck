@@ -1,8 +1,10 @@
 #!/usr/bin/bash
 # Runs INSIDE an Arch Linux ARM container (menci/archlinuxarm:base-devel) on an arm64 runner.
 # Builds Arch's own gamescope package of the runtime's version with the patches in ./patches
-# added, then keeps only the gamescope binary, checks its library needs against the runtime's
-# list, and packs it as gamescope.tzst (usr/local/bin/gamescope) for the apk to stage.
+# added, then keeps the gamescope binary and its WSI layer (which runs inside every game and
+# carries the WSI patches), checks their library needs against the runtime's list, and packs them
+# as gamescope.tzst (usr/local/bin/gamescope, usr/local/lib/droiddeck/libVkLayer_FROG_gamescope_wsi_*.so)
+# for the apk to stage.
 set -euxo pipefail
 VERSION=${GAMESCOPE_VERSION:-3.16.29}
 WORK=/work
@@ -61,8 +63,15 @@ tar --use-compress-program=unzstd -xf "$PKG" -C out --strip-components=2 usr/bin
 mv out/gamescope out/usr/local/bin/gamescope
 chmod 755 out/usr/local/bin/gamescope
 strip --strip-unneeded out/usr/local/bin/gamescope || true
+# The WSI layer the runtime's Vulkan loader puts into every game (usr/lib in the package): the
+# 01xx WSI patches live there, so the binary alone leaves games on the stock layer.
+mkdir -p out/usr/local/lib/droiddeck
+tar --use-compress-program=unzstd -xf "$PKG" -C out/usr/local/lib/droiddeck --strip-components=2 --wildcards 'usr/lib/libVkLayer_FROG_gamescope_wsi_*.so'
+LAYER=$(ls out/usr/local/lib/droiddeck/libVkLayer_FROG_gamescope_wsi_*.so)
+test "$(basename "$LAYER")" = libVkLayer_FROG_gamescope_wsi_aarch64.so
+strip --strip-unneeded "$LAYER" || true
 # Every NEEDED library must be one the runtime ships, or the binary would not load there.
-NEEDED=$(readelf -d out/usr/local/bin/gamescope | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p')
+NEEDED=$(readelf -d out/usr/local/bin/gamescope "$LAYER" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p' | sort -u)
 echo "NEEDED: $NEEDED"
 MISSING=""
 for lib in $NEEDED; do grep -qx "$lib" tools/gamescope/runtime-sonames.txt || MISSING="$MISSING $lib"; done

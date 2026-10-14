@@ -3,6 +3,9 @@
 Built by `.github/workflows/build-gamescope.yml` on top of the exact gamescope the Linux runtime
 ships (3.16.29, Arch Linux ARM's package, same build options), and staged from the apk over
 `/usr/local/bin/gamescope` at each session start - the hosted runtime image is never touched.
+Its WSI layer (`libVkLayer_FROG_gamescope_wsi_aarch64.so`, loaded into every game) is staged over
+the runtime's copy of the same version in `/usr/lib`: WSI patches (0132) live there, and until
+gamescope-3.16.29-p9-mali5 only the binary was shipped, so they never reached a game.
 The binary's shared-library needs are checked against `runtime-sonames.txt`, the runtime's own
 library list, before anything is published.
 
