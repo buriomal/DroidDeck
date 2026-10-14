@@ -362,11 +362,14 @@ def main():
         if "DISABLE_BCN_COMPUTE" not in env:
             env["ENABLE_BCN_COMPUTE"] = "1"
         env.setdefault("PANVK_DXVK_FEATURES", "1")
-        # 10-bit swapchains (Unreal's default back buffer) came out black through Xwayland's shm
-        # buffers; the gamescope WSI layer then offers 8-bit formats only. The DXVK fps counter
-        # shows whether the game's own frames reach the screen.
-        env.setdefault("GAMESCOPE_WSI_HIDE_10BIT", "1")
-        env.setdefault("DXVK_HUD", "fps")
+        # Octopath drew black while DXVK's own HUD, which never uses pipeline libraries, showed:
+        # PanVK's graphics pipeline library path is the suspect, so DXVK links full pipelines.
+        # The HUD's draw and pipeline counters show whether the game's draws run.
+        if "enableGraphicsPipelineLibrary" not in env.get("DXVK_CONFIG", ""):
+            own = env.get("DXVK_CONFIG", "").strip().rstrip(";").strip()
+            gpl = "dxvk.enableGraphicsPipelineLibrary = False"
+            env["DXVK_CONFIG"] = own + "; " + gpl if own else gpl
+        env.setdefault("DXVK_HUD", "fps,drawcalls,pipelines")
         mali_probe(env)
     command, env = start_without_steam(command, env, app_id)
     sync = load_sync()
