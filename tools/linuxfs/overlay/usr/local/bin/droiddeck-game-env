@@ -305,6 +305,11 @@ def mark_install_scripts(command, env):
         print("droiddeck-game-env: install scripts not marked (%s)" % error, file=sys.stderr)
 
 
+def is_unreal(exe):
+    """An Unreal Engine game: packaged Unreal games ship an Engine folder beside the executable."""
+    return os.path.isdir(os.path.join(os.path.dirname(exe), "Engine"))
+
+
 def mali_probe(env):
     """PanVK: what a game's Vulkan sees, from this launch's own environment - DXVK has refused a
     device the session's probe accepted. Loader layer logging goes on for the game with it."""
@@ -374,6 +379,12 @@ def main():
             gpl = "dxvk.enableGraphicsPipelineLibrary = False"
             env["DXVK_CONFIG"] = own + "; " + gpl if own else gpl
         env.setdefault("DXVK_HUD", "fps,drawcalls,pipelines")
+        # Octopath kept drawing the same ~40 calls a frame on a black screen with no new
+        # pipelines: an Unreal startup movie that never decodes. Skip startup movies.
+        if len(command) > 2 and command[1] == "waitforexitandrun" and is_unreal(command[2]) \
+                and "-nostartupmovies" not in command:
+            command = command + ["-nostartupmovies"]
+            print("droiddeck-game-env: Unreal game on PanVK: -nostartupmovies", file=sys.stderr)
         mali_probe(env)
     command, env = start_without_steam(command, env, app_id)
     sync = load_sync()
