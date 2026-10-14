@@ -330,7 +330,7 @@ def thread_load():
     """PanVK games run slowly: log their busiest threads while they run (this process becomes the
     game), to tell a CPU-bound game thread from a GPU-bound one."""
     try:
-        subprocess.Popen(["droiddeck-thread-load", str(os.getpid())], stdin=subprocess.DEVNULL,
+        subprocess.Popen([sys.executable, "/usr/local/bin/droiddeck-thread-load", str(os.getpid())], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, start_new_session=True)
     except OSError as error:
         print("droiddeck-game-env: thread load logging unavailable (%s)" % error, file=sys.stderr)
