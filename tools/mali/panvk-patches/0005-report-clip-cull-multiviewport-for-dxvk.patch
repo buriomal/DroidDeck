@@ -3,8 +3,7 @@ Report clip/cull distances and multiViewport for DXVK
 DXVK refuses a device without them, so D3D11 games stop with
 "DX11 feature level 10.0 is required". Mali has no clip/cull distances;
 the shader variables are demoted to temporaries and only viewport 0 is
-drawn. Reported only with PANVK_DXVK_FEATURES=1, which DroidDeck sets
-for games.
+drawn. Only with PANVK_DXVK_FEATURES=1, which DroidDeck sets for games.
 
 diff --git a/src/panfrost/vulkan/panvk_vX_physical_device.c b/src/panfrost/vulkan/panvk_vX_physical_device.c
 index 6f8062ef02d..f7f9155e112 100644
@@ -83,10 +82,18 @@ index 6f8062ef02d..f7f9155e112 100644
        .pointSizeRange = {pointSizeRangeMin, pointSizeRangeMax},
        .lineWidthRange = {0.0, 7.9921875},
 diff --git a/src/panfrost/vulkan/panvk_vX_shader.c b/src/panfrost/vulkan/panvk_vX_shader.c
-index ec4df409ddb..9c93c57e1a5 100644
+index ec4df409ddb..712fe935560 100644
 --- a/src/panfrost/vulkan/panvk_vX_shader.c
 +++ b/src/panfrost/vulkan/panvk_vX_shader.c
-@@ -626,6 +626,53 @@ panvk_get_spirv_options(UNUSED struct vk_physical_device *vk_pdev,
+@@ -19,6 +19,7 @@
+ #include "panvk_physical_device.h"
+ #include "panvk_sampler.h"
+ #include "panvk_shader.h"
++#include "util/u_debug.h"
+ 
+ #include "spirv/nir_spirv.h"
+ #include "util/memstream.h"
+@@ -626,6 +627,53 @@ panvk_get_spirv_options(UNUSED struct vk_physical_device *vk_pdev,
     };
  }
  
@@ -140,11 +147,14 @@ index ec4df409ddb..9c93c57e1a5 100644
  static void
  panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
                       nir_shader *nir,
-@@ -633,6 +680,9 @@ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
+@@ -633,6 +681,12 @@ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
  {
     struct panvk_physical_device *pdev = to_panvk_physical_device(vk_pdev);
  
-+   if (nir->info.stage != MESA_SHADER_COMPUTE)
++   /* Only where the features are reported (PANVK_DXVK_FEATURES, see
++    * panvk_vX_physical_device.c): elsewhere shaders compile as they always did. */
++   if (nir->info.stage != MESA_SHADER_COMPUTE &&
++       debug_get_bool_option("PANVK_DXVK_FEATURES", false))
 +      NIR_PASS(_, nir, panvk_drop_clip_cull_vars);
 +
     /* Ensure to regroup output variables at the same location */
