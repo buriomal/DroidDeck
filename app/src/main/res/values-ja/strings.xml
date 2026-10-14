@@ -2058,6 +2058,8 @@
     <string name="device_info_copied">コピーしました。</string>
     <string name="force_ssbs_title">SSBSを強制</string>
     <string name="force_ssbs_hint">Wineがオフにし続けるCPUの速度設定をオンに保ちます。Snapdragon 8 EliteではWindowsゲームが速くなることがあります。古いチップではほとんど変化がありません。次のゲーム起動時に反映されます。</string>
+    <string name="bcn_astc_title">BCテクスチャをASTCに変換（Mali）</string>
+    <string name="bcn_astc_hint">WindowsゲームのBCテクスチャを無圧縮で持つ代わりに、GPUでASTCに圧縮し直します。メモリが減り速くなることがありますが、画質が落ちたり表示が崩れたりするゲームもあります。次のゲーム起動時に反映されます。</string>
     <string name="common_close">閉じる</string>
     <string name="common_back">戻る</string>
     <string name="common_edit">編集</string>

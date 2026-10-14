@@ -100,6 +100,7 @@ internal fun GameEnvironmentEditor(byPad: Boolean, initialScope: String = "", on
     var editing by remember { mutableStateOf<EnvironmentVariableEdit?>(null) }
     val preset = SessionPrefs.fexPreset(context)
     val forceSsbs = SessionPrefs.forceSsbs(context)
+    val bcnAstc = SessionPrefs.bcnAstc(context)
     val firstFocus = remember { FocusRequester() }
     var editByPad by remember { mutableStateOf(false) }
     val dialogInput = LocalInputModeManager.current
@@ -164,7 +165,7 @@ internal fun GameEnvironmentEditor(byPad: Boolean, initialScope: String = "", on
         if (current == null && !error) Small(stringResource(R.string.game_env_loading))
         if (current != null) {
             val own = current.entries(scope)
-            val entries = GameEnvironment.effective(current, preset, scope, forceSsbs).toSortedMap()
+            val entries = GameEnvironment.effective(current, preset, scope, forceSsbs, bcnAstc).toSortedMap()
             if (entries.isEmpty()) Small(stringResource(R.string.game_env_empty))
             else Panel {
                 entries.entries.forEachIndexed { i, (name, value) ->

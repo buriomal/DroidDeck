@@ -339,6 +339,7 @@ class MainActivity : ComponentActivity() {
     private var resolution by mutableStateOf(com.droiddeck.launcher.session.SessionDisplay.DEFAULT_RESOLUTION)
     private var fexPreset by mutableStateOf("")
     private var forceSsbs by mutableStateOf(false)
+    private var bcnAstc by mutableStateOf(false)
     private var runSteamAtStartup by mutableStateOf(false)
     private var theme by mutableStateOf("graphite")
     private var appScale by mutableStateOf(com.droiddeck.launcher.core.AppUiPrefs.DEFAULT_SCALE)
@@ -1145,6 +1146,7 @@ class MainActivity : ComponentActivity() {
         // The Proton layer's options for every Proton, as they are now.
         fexPreset = SessionPrefs.fexPreset(this)
         forceSsbs = SessionPrefs.forceSsbs(this)
+        bcnAstc = SessionPrefs.bcnAstc(this)
         fastSync = SessionPrefs.fastSync(this)
         fsyncFirst = SessionPrefs.fsyncFirst(this)
         syncFallback = SessionPrefs.syncFallback(this)
@@ -1227,6 +1229,8 @@ class MainActivity : ComponentActivity() {
                     },
                     onFexPreset = { id -> SessionPrefs.setFexPreset(this, id); fexPreset = id },
                     onForceSsbs = { on -> SessionPrefs.setForceSsbs(this, on); forceSsbs = on },
+                    bcnAstc = bcnAstc,
+                    onBcnAstc = { on -> SessionPrefs.setBcnAstc(this, on); bcnAstc = on },
                 )
             },
         )
@@ -1510,6 +1514,7 @@ class MainActivity : ComponentActivity() {
         resolution = SessionPrefs.resolutionChoice(this, mode, com.droiddeck.launcher.session.SessionDisplay.panelSize(this))
         fexPreset = SessionPrefs.fexPreset(this)
         forceSsbs = SessionPrefs.forceSsbs(this)
+        bcnAstc = SessionPrefs.bcnAstc(this)
         fastSync = SessionPrefs.fastSync(this)
         fsyncFirst = SessionPrefs.fsyncFirst(this)
         syncFallback = SessionPrefs.syncFallback(this)

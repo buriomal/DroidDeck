@@ -25,7 +25,7 @@ object GameEnvironment {
     fun validValue(value: String) = '\u0000' !in value && value.length <= 8192
     fun validScope(scope: String) = scope.isEmpty() || (Regex("[1-9][0-9]*").matches(scope) && scope.toLongOrNull()?.let { it in 1..4294967295L } == true)
 
-    fun defaults(preset: String, forceSsbs: Boolean = false): Map<String, String?> = linkedMapOf<String, String?>(
+    fun defaults(preset: String, forceSsbs: Boolean = false, bcnAstc: Boolean = false): Map<String, String?> = linkedMapOf<String, String?>(
         "MESA_SHADER_CACHE_DISABLE" to "false",
         "VKD3D_FEATURE_LEVEL" to "12_2",
         "VKD3D_SHADER_MODEL" to "6_9",
@@ -40,9 +40,13 @@ object GameEnvironment {
         FexPreset.env(preset).forEach { put(it.substringBefore('='), it.substringAfter('=')) }
         // Steam settings' Force SSBS: droiddeck-game-env preloads libssbs.so into the game's Wine.
         if (forceSsbs) put(FORCE_SSBS, "1")
+        // Mali's BC to ASTC switch: bcn_layer re-encodes BC textures as ASTC instead of storing
+        // them uncompressed (RGBA). Less memory and bandwidth; quality and speed are untested here.
+        if (bcnAstc) put(BCN_ASTC, "1")
     }
 
     const val FORCE_SSBS = "DROIDDECK_FORCE_SSBS"
+    const val BCN_ASTC = "BCN_TRANSCODE_TO_ASTC"
 
     /**
      * A game's Start without Steam: droiddeck-game-env launches it without Proton's steam.exe (umu's
@@ -58,8 +62,8 @@ object GameEnvironment {
         return withScopeValue(config, scope, NO_STEAM, if (on) "1" else null)
     }
 
-    fun effective(config: Config, preset: String, scope: String, forceSsbs: Boolean = false): Map<String, String?> =
-        defaults(preset, forceSsbs) + config.shared + if (scope.isEmpty()) emptyMap() else config.games[scope].orEmpty()
+    fun effective(config: Config, preset: String, scope: String, forceSsbs: Boolean = false, bcnAstc: Boolean = false): Map<String, String?> =
+        defaults(preset, forceSsbs, bcnAstc) + config.shared + if (scope.isEmpty()) emptyMap() else config.games[scope].orEmpty()
 
     fun hasOverride(config: Config, scope: String, name: String): Boolean =
         scope.isNotEmpty() && config.entries(scope).containsKey(name)

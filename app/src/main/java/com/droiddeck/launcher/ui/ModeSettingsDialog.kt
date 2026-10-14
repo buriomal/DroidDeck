@@ -475,6 +475,7 @@ fun ModeSheetRows(s: ModeSettings, a: ModeSettingsActions, tab: String, extras: 
 internal fun ProtonOptions(
     syncBackend: String, fexPreset: String, forceSsbs: Boolean,
     onSyncBackend: (String) -> Unit, onFexPreset: (String) -> Unit, onForceSsbs: (Boolean) -> Unit,
+    bcnAstc: Boolean = false, onBcnAstc: (Boolean) -> Unit = {},
 ) {
     val host = rememberMenuHost()
     SettingsRow(stringResource(R.string.sync_backend_title), stringResource(R.string.sync_backend_hint), stacked = true) {
@@ -494,6 +495,10 @@ internal fun ProtonOptions(
         note = stringResource(FexPreset.byId(fexPreset).detail), onPick = onFexPreset,
     )
     ToggleRow(host, "ssbs", stringResource(R.string.force_ssbs_title), stringResource(R.string.force_ssbs_hint), forceSsbs, onChange = onForceSsbs)
+    // Only where bcn_layer is in use (no Adreno).
+    if (com.droiddeck.launcher.gpu.MaliVenus.enabled()) {
+        ToggleRow(host, "bcnAstc", stringResource(R.string.bcn_astc_title), stringResource(R.string.bcn_astc_hint), bcnAstc, onChange = onBcnAstc)
+    }
     GameEnvironmentRow()
 }
 
