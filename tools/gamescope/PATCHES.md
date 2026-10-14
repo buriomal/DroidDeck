@@ -60,3 +60,7 @@ app's Wayland-hosted gamescope never reaches, or need a newer gamescope than the
   gamescope passed its 10-bit texture straight to the app's compositor as a plane, in a format the
   compositor never advertised, and the screen stayed black while the game drew 35-50 fps. Such a
   texture gets no host buffer now, and a layer without one is composited into the 8-bit output.
+- `0132-wsi-hide-10bit-sdr-formats.patch` - this app: with 0131 the 10-bit swapchain was
+  composited, but the game still showed black. `GAMESCOPE_WSI_HIDE_10BIT=1` (set by
+  droiddeck-game-env for PanVK games) stops the WSI layer offering 10-bit sRGB formats, so DXVK
+  presents 8-bit like the Steam client, whose frames show.

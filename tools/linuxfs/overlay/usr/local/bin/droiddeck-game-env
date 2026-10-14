@@ -362,6 +362,11 @@ def main():
         if "DISABLE_BCN_COMPUTE" not in env:
             env["ENABLE_BCN_COMPUTE"] = "1"
         env.setdefault("PANVK_DXVK_FEATURES", "1")
+        # 10-bit swapchains (Unreal's default back buffer) came out black through Xwayland's shm
+        # buffers; the gamescope WSI layer then offers 8-bit formats only. The DXVK fps counter
+        # shows whether the game's own frames reach the screen.
+        env.setdefault("GAMESCOPE_WSI_HIDE_10BIT", "1")
+        env.setdefault("DXVK_HUD", "fps")
         mali_probe(env)
     command, env = start_without_steam(command, env, app_id)
     sync = load_sync()

@@ -1,0 +1,109 @@
+From: DroidDeck
+Subject: [PATCH] wsi layer: optionally hide 10-bit SDR surface formats
+
+Octopath Traveler (Unreal, R10G10B10A2 back buffer) on PanVK presents through Xwayland's shm
+buffers, and its 10-bit A2B10G10R10 swapchain stayed black even once gamescope composited it,
+while 8-bit swapchains (the Steam client) show. GAMESCOPE_WSI_HIDE_10BIT=1 drops the 10-bit
+sRGB-nonlinear formats from the surface format lists, so DXVK presents 8-bit.
+---
+--- a/layer/VkLayer_FROG_gamescope_wsi.cpp
++++ b/layer/VkLayer_FROG_gamescope_wsi.cpp
+@@ -877,7 +877,7 @@
+       return array;
+     }();
+ 
+-    static VkResult GetPhysicalDeviceSurfaceFormatsKHR(
++    static VkResult QuerySurfaceFormatsKHR(
+       const vkroots::VkInstanceDispatch* pDispatch,
+             VkPhysicalDevice             physicalDevice,
+             VkSurfaceKHR                 surface,
+@@ -905,7 +905,7 @@
+         selectedSurface);
+     }
+ 
+-    static VkResult GetPhysicalDeviceSurfaceFormats2KHR(
++    static VkResult QuerySurfaceFormats2KHR(
+       const vkroots::VkInstanceDispatch*     pDispatch,
+             VkPhysicalDevice                 physicalDevice,
+       const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo,
+@@ -934,6 +934,80 @@
+         &surfaceInfo);
+     }
+ 
++    // DroidDeck: games reach gamescope through Xwayland's shm buffers on Mali, and a 10-bit SDR
++    // swapchain (Unreal's default R10G10B10A2 back buffer) came out black there while 8-bit
++    // swapchains show. With GAMESCOPE_WSI_HIDE_10BIT=1 the 10-bit SDR formats are not offered, so
++    // DXVK and vkd3d-proton present 8-bit (they blit a 10-bit back buffer into it).
++    static bool hide10BitSdrFormats() {
++      static bool s_hide = parseEnv<bool>("GAMESCOPE_WSI_HIDE_10BIT").value_or(false);
++      return s_hide;
++    }
++
++    static bool is10BitSdrFormat(const VkSurfaceFormatKHR &format) {
++      return format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
++             (format.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
++              format.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32);
++    }
++
++    template <typename T>
++    static VkResult writeFilteredFormats(const std::vector<T> &formats, uint32_t *pCount, T *pOut, auto copyOut) {
++      if (!pOut) {
++        *pCount = uint32_t(formats.size());
++        return VK_SUCCESS;
++      }
++      const uint32_t n = std::min(*pCount, uint32_t(formats.size()));
++      for (uint32_t i = 0; i < n; i++)
++        copyOut(pOut[i], formats[i]);
++      *pCount = n;
++      return n < formats.size() ? VK_INCOMPLETE : VK_SUCCESS;
++    }
++
++    static VkResult GetPhysicalDeviceSurfaceFormatsKHR(
++      const vkroots::VkInstanceDispatch* pDispatch,
++            VkPhysicalDevice             physicalDevice,
++            VkSurfaceKHR                 surface,
++            uint32_t*                    pSurfaceFormatCount,
++            VkSurfaceFormatKHR*          pSurfaceFormats) {
++      if (!hide10BitSdrFormats())
++        return QuerySurfaceFormatsKHR(pDispatch, physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats);
++
++      uint32_t count = 0;
++      VkResult res = QuerySurfaceFormatsKHR(pDispatch, physicalDevice, surface, &count, nullptr);
++      if (res < 0)
++        return res;
++      std::vector<VkSurfaceFormatKHR> formats(count);
++      res = QuerySurfaceFormatsKHR(pDispatch, physicalDevice, surface, &count, formats.data());
++      if (res < 0)
++        return res;
++      formats.resize(count);
++      std::erase_if(formats, is10BitSdrFormat);
++      return writeFilteredFormats(formats, pSurfaceFormatCount, pSurfaceFormats,
++        [](VkSurfaceFormatKHR &dst, const VkSurfaceFormatKHR &src) { dst = src; });
++    }
++
++    static VkResult GetPhysicalDeviceSurfaceFormats2KHR(
++      const vkroots::VkInstanceDispatch*     pDispatch,
++            VkPhysicalDevice                 physicalDevice,
++      const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo,
++            uint32_t*                        pSurfaceFormatCount,
++            VkSurfaceFormat2KHR*             pSurfaceFormats) {
++      if (!hide10BitSdrFormats())
++        return QuerySurfaceFormats2KHR(pDispatch, physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats);
++
++      uint32_t count = 0;
++      VkResult res = QuerySurfaceFormats2KHR(pDispatch, physicalDevice, pSurfaceInfo, &count, nullptr);
++      if (res < 0)
++        return res;
++      std::vector<VkSurfaceFormat2KHR> formats(count, VkSurfaceFormat2KHR{ .sType = VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR });
++      res = QuerySurfaceFormats2KHR(pDispatch, physicalDevice, pSurfaceInfo, &count, formats.data());
++      if (res < 0)
++        return res;
++      formats.resize(count);
++      std::erase_if(formats, [](const VkSurfaceFormat2KHR &f) { return is10BitSdrFormat(f.surfaceFormat); });
++      return writeFilteredFormats(formats, pSurfaceFormatCount, pSurfaceFormats,
++        [](VkSurfaceFormat2KHR &dst, const VkSurfaceFormat2KHR &src) { dst.surfaceFormat = src.surfaceFormat; });
++    }
++
+     static VkResult GetPhysicalDeviceSurfaceCapabilitiesKHR(
+       const vkroots::VkInstanceDispatch*     pDispatch,
+             VkPhysicalDevice                 physicalDevice,
