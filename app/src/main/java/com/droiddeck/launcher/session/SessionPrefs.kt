@@ -600,9 +600,11 @@ object SessionPrefs {
 
     /**
      * Mali: bcn_layer transcodes BC textures to ASTC instead of decoding them to uncompressed RGBA.
-     * Off by default (the tested path); a game's own environment can still say BCN_TRANSCODE_TO_ASTC=0.
+     * On by default on the PanVK path (smaller textures than RGBA on a GPU-bound path), off elsewhere;
+     * a game's own environment can still say BCN_TRANSCODE_TO_ASTC=0.
      */
-    fun bcnAstc(context: Context): Boolean = prefs(context).getBoolean("bcnAstc", false)
+    fun bcnAstc(context: Context): Boolean =
+        prefs(context).getBoolean("bcnAstc", com.droiddeck.launcher.gpu.MaliVenus.panvk())
 
     fun setBcnAstc(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean("bcnAstc", on).apply()

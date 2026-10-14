@@ -1,0 +1,33 @@
+--- a/src/bcn_layer.cpp	2026-10-14 11:10:31.114603372 +0000
++++ b/src/bcn_layer.cpp	2026-10-14 11:10:31.135580231 +0000
+@@ -1024,6 +1024,7 @@
+     device->transcode_to_etc1 = transcode_to_etc1;
+     device->transcode_to_etc2 = transcode_to_etc2;
+     device->transcode_to_astc = transcode_to_astc;
++    Logger::log("info", "BC texture mode: %s", transcode_to_astc ? "ASTC transcode" : transcode_to_etc2 ? "ETC2 transcode" : "decode to RGBA");
+     device->profile_transfers = profile_transfers;
+     device->profile_more_transfers = profile_more_transfers;
+     device->add_watermark = add_watermark;
+--- a/src/command_buffer.cpp	2026-10-14 11:10:31.114942425 +0000
++++ b/src/command_buffer.cpp	2026-10-14 11:10:31.135680685 +0000
+@@ -6,6 +6,7 @@
+ #include "mali_gpu_profiler.hpp"
+ #include "pipeline_state.hpp"
+ #include "staging_resources.hpp"
++#include <atomic>
+ 
+ std::unordered_map<VkCommandBuffer, std::shared_ptr<struct command_buffer>> commandBuffersMap;
+ 
+@@ -342,6 +343,12 @@
+     int texel_size = enable_transcode ? 1 : is_bc6(format) ? 8 : 4;
+     VkFormat target_format = dstImg->transcode_to_etc2 ? get_format_for_bcn_to_etc2(dev, format)
+         : dstImg->transcode_to_astc ? get_format_for_bcn_to_astc(dev, format) : get_format_for_bcn(format);
++    if (dstImg->transcode_to_astc) {
++        // One line per process, so a log shows the switch actually reached an upload.
++        static std::atomic<bool> logged_astc{false};
++        if (!logged_astc.exchange(true))
++            Logger::log("info", "first BC upload transcoded to ASTC (format %d -> %d)", (int)format, (int)target_format);
++    }
+ 
+     VkBufferImageCopy copy_region = region;
+     int w = copy_region.imageExtent.width;
