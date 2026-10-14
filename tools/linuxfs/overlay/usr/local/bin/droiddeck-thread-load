@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+"""Log the busiest threads of a running game, so a slow game shows whether a CPU thread is the limit.
+
+droiddeck-thread-load PID [INTERVAL]: every INTERVAL seconds (default 15), print the six threads of
+Windows processes (*.exe) that used the most CPU, as a percentage of one core, until PID exits."""
+import os
+import sys
+import time
+
+TICKS = os.sysconf("SC_CLK_TCK")
+
+
+def exe_pids():
+    pids = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % name, "rb") as f:
+                first = f.read().split(b"\0", 1)[0]
+        except OSError:
+            continue
+        if first.lower().endswith(b".exe"):
+            pids.append((name, os.path.basename(first.replace(b"\\", b"/")).decode(errors="replace")))
+    return pids
+
+
+def thread_times():
+    times = {}
+    for pid, exe in exe_pids():
+        try:
+            tids = os.listdir("/proc/%s/task" % pid)
+        except OSError:
+            continue
+        for tid in tids:
+            try:
+                with open("/proc/%s/task/%s/stat" % (pid, tid)) as f:
+                    stat = f.read()
+            except OSError:
+                continue
+            name = stat[stat.index("(") + 1:stat.rindex(")")]
+            fields = stat[stat.rindex(")") + 2:].split()
+            times[(pid, tid)] = (exe, name, int(fields[11]) + int(fields[12]))
+    return times
+
+
+def main():
+    if len(sys.argv) < 2:
+        return 2
+    watched = sys.argv[1]
+    interval = float(sys.argv[2]) if len(sys.argv) > 2 else 15.0
+    before, then = thread_times(), time.monotonic()
+    while os.path.exists("/proc/" + watched):
+        time.sleep(interval)
+        now, at = thread_times(), time.monotonic()
+        elapsed = (at - then) * TICKS
+        busy = []
+        for key, (exe, name, ticks) in now.items():
+            if key in before:
+                busy.append((100.0 * (ticks - before[key][2]) / elapsed, exe, name))
+        busy.sort(reverse=True)
+        if busy:
+            total = sum(b[0] for b in busy)
+            top = ", ".join("%s %.0f%%" % (name, load) for load, _, name in busy[:6])
+            print("droiddeck-thread-load: %s total %.0f%% | %s" % (busy[0][1], total, top), file=sys.stderr, flush=True)
+        before, then = now, at
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

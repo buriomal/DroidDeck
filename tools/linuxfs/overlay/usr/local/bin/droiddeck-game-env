@@ -326,6 +326,16 @@ def mali_probe(env):
         print("droiddeck-game-env: probe failed (%s)" % error, file=sys.stderr)
 
 
+def thread_load():
+    """PanVK games run slowly: log their busiest threads while they run (this process becomes the
+    game), to tell a CPU-bound game thread from a GPU-bound one."""
+    try:
+        subprocess.Popen(["droiddeck-thread-load", str(os.getpid())], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, start_new_session=True)
+    except OSError as error:
+        print("droiddeck-game-env: thread load logging unavailable (%s)" % error, file=sys.stderr)
+
+
 def main():
     command = sys.argv[1:]
     if not command:
@@ -377,6 +387,7 @@ def main():
             command = command + ["-nostartupmovies"]
             print("droiddeck-game-env: Unreal game on PanVK: -nostartupmovies", file=sys.stderr)
         mali_probe(env)
+        thread_load()
     # Suspending the session freezes the game; Unreal's game thread then gives up on the render
     # thread after ~30 s ("GameThread timed out waiting for RenderThread") and the game exits.
     if len(command) > 2 and command[1] == "waitforexitandrun" and is_unreal(command[2]) \
