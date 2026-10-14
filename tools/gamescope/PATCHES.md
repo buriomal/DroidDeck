@@ -56,3 +56,7 @@ app's Wayland-hosted gamescope never reaches, or need a newer gamescope than the
   Traveler) asked for a 10-bit A2B10G10R10 swapchain, the nested backend offered no modifier for
   that format (the app's compositor takes 8-bit RGB), and gamescope aborted on
   `assert( !modifiers.empty() )`, ending the session. It falls back to the linear modifier.
+- `0131-composite-formats-host-cannot-show.patch` - this app: after 0130 the same game ran, but
+  gamescope passed its 10-bit texture straight to the app's compositor as a plane, in a format the
+  compositor never advertised, and the screen stayed black while the game drew 35-50 fps. Such a
+  texture gets no host buffer now, and a layer without one is composited into the 8-bit output.

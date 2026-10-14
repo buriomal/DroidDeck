@@ -1,0 +1,40 @@
+From: DroidDeck
+Subject: [PATCH] wayland: composite layers the host compositor cannot show
+
+Octopath Traveler on PanVK presents a 10-bit A2B10G10R10 swapchain. The app's compositor
+advertises 8-bit RGB only, yet gamescope handed the game's texture to it as a plane, and the screen
+stayed black while the game ran at 35-50 fps. A texture whose format the host never advertised gets
+no host buffer now, and any layer without one (or in such a format) is composited into the output.
+---
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2556,7 +2556,9 @@
+ 		m_dmabuf = dmabuf;
+ 	}
+ 
+-	if ( flags.bFlippable == true )
++	// A format the host compositor never advertised (a game's 10-bit swapchain under the app's
++	// 8-bit compositor) is not handed over: the texture is composited instead.
++	if ( flags.bFlippable == true && ( !GetBackend()->UsesModifiers() || GetBackend()->SupportsFormat( drmFormat ) ) )
+ 	{
+ 		m_pBackendFb = GetBackend()->ImportDmabufToBackend( &m_dmabuf );
+ 	}
+--- a/src/Backends/WaylandBackend.cpp
++++ b/src/Backends/WaylandBackend.cpp
+@@ -1110,6 +1110,16 @@
+ 
+             bNeedsFullComposite |= !!(g_uCompositeDebug & CompositeDebugFlag::Heatmap);
+ 
++            // A layer the host compositor cannot show as is (no host buffer, or a format it never
++            // advertised, like a game's 10-bit swapchain) is composited into the output instead of
++            // being passed through, which showed a black screen.
++            for ( int i = 0; i < int( pFrameInfo->layers.count() ); i++ )
++            {
++                const FrameInfo_t::Layer_t &layer = pFrameInfo->layers.get( i );
++                if ( layer.tex && ( !layer.tex->GetBackendFb() || !m_pBackend->SupportsFormat( layer.tex->drmFormat() ) ) )
++                    bNeedsFullComposite = true;
++            }
++
+             if ( !bNeedsFullComposite )
+             {
+                 bool bNeedsBacking = true;
