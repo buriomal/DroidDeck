@@ -1895,6 +1895,7 @@
     <string name="gpuinfo_experimental">実験的：ドライバーはテストビルドです</string>
     <string name="gpuinfo_below_tested">テスト済みハードウェア（Adreno 725以降）未満：動作しない可能性があります</string>
     <string name="gpuinfo_unsupported">サポート対象外：DroidDeckにはAdreno（Snapdragon）GPUが必要です</string>
+    <string name="gpuinfo_mali_panvk">試験的：MaliのGPUをPanVKドライバで動かします。ゲームが遅い、表示が乱れることがあります</string>
 
     <!-- Driver downloads and imports -->
     <string name="turnip_rate_limited">GitHubのレート制限に達しました。後でもう一度お試しください</string>

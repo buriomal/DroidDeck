@@ -45,6 +45,8 @@ data class GpuInfo(
 
     val support: Support
         get() = when {
+            // A Mali GPU runs games through PanVK (MaliVenus), experimental rather than refused.
+            family == Family.NOT_ADRENO && MaliVenus.panvk() -> Support.UNTESTED
             family == Family.NOT_ADRENO -> Support.UNSUPPORTED
             family == Family.A6XX && model == 650 -> Support.TESTED
             family == Family.A8XX -> Support.TESTED
@@ -56,7 +58,8 @@ data class GpuInfo(
     val supportText: String
         get() = when (support) {
             Support.TESTED -> "Supported"
-            Support.UNTESTED -> if (family == Family.A7XX_LOW) "Experimental: its drivers are test builds"
+            Support.UNTESTED -> if (family == Family.NOT_ADRENO) "Experimental: Mali GPU through the PanVK driver, games may run slower or show glitches"
+                else if (family == Family.A7XX_LOW) "Experimental: its drivers are test builds"
                 else "Outside tested hardware (Adreno 650, 725 and newer): it may not run"
             Support.UNSUPPORTED -> "Not supported: DroidDeck needs an Adreno (Snapdragon) GPU"
         }
@@ -64,7 +67,8 @@ data class GpuInfo(
     /** [supportText] in the app's language. */
     fun supportText(context: Context): String = context.getString(when (support) {
         Support.TESTED -> R.string.gpuinfo_supported
-        Support.UNTESTED -> if (family == Family.A7XX_LOW) R.string.gpuinfo_experimental else R.string.gpuinfo_below_tested
+        Support.UNTESTED -> if (family == Family.NOT_ADRENO) R.string.gpuinfo_mali_panvk
+            else if (family == Family.A7XX_LOW) R.string.gpuinfo_experimental else R.string.gpuinfo_below_tested
         Support.UNSUPPORTED -> R.string.gpuinfo_unsupported
     })
 

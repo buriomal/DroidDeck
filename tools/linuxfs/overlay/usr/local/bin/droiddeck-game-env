@@ -381,6 +381,11 @@ def main():
         # out black. Decoding into a buffer and copying it in works for every format.
         env.setdefault("BCN_COMPUTE_IMAGE_VIEW", "0")
         env.setdefault("PANVK_DXVK_FEATURES", "1")
+        # Unreal asks for a 10-bit back buffer. The app's compositor shows 8-bit, so gamescope
+        # (patch 0131) redraws every such frame into an 8-bit one, a full-screen pass per frame on
+        # the same GPU. Offered only 8-bit formats (patch 0132), DXVK presents what gamescope can
+        # hand over as it is, the way the Steam client's frames go.
+        env.setdefault("GAMESCOPE_WSI_HIDE_10BIT", "1")
         # Unreal startup movies only delay the game on PanVK; skip them.
         if len(command) > 2 and command[1] == "waitforexitandrun" and is_unreal(command[2]) \
                 and "-nostartupmovies" not in command:

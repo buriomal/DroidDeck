@@ -1895,6 +1895,7 @@
     <string name="gpuinfo_experimental">實驗性：其驅動程式為測試版本</string>
     <string name="gpuinfo_below_tested">低於已測試的硬件（Adreno 725 或更新）：可能無法執行</string>
     <string name="gpuinfo_unsupported">不受支援：DroidDeck 需要 Adreno (Snapdragon) GPU</string>
+    <string name="gpuinfo_mali_panvk">實驗性：透過 PanVK 驅動使用 Mali GPU，遊戲可能較慢或出現顯示問題</string>
 
     <!-- Driver downloads and imports -->
     <string name="turnip_rate_limited">已達 GitHub 的速率限制 - 請稍後再試</string>

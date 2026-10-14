@@ -1935,6 +1935,7 @@
     <string name="gpuinfo_experimental">Experimental: sus controladores son versiones de prueba</string>
     <string name="gpuinfo_below_tested">Por debajo del hardware probado (Adreno 725 y posteriores): puede que no funcione</string>
     <string name="gpuinfo_unsupported">No compatible: DroidDeck necesita una GPU Adreno (Snapdragon)</string>
+    <string name="gpuinfo_mali_panvk">Experimental: GPU Mali con el controlador PanVK; los juegos pueden ir más lentos o mostrar fallos</string>
 
     <!-- Driver downloads and imports -->
     <string name="turnip_rate_limited">Se alcanzó el límite de solicitudes de GitHub - inténtalo más tarde</string>
