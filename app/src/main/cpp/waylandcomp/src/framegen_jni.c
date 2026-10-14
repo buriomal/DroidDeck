@@ -64,3 +64,16 @@ Java_com_droiddeck_launcher_wayland_WaylandCompositor_nativeFrameGenStats(JNIEnv
     if (arr) (*env)->SetFloatArrayRegion(env, arr, 0, 6, st);
     return arr;
 }
+
+JNIEXPORT jint JNICALL
+Java_com_droiddeck_launcher_wayland_WaylandCompositor_nativeFrameGenEngineProblem(JNIEnv *env, jclass clazz, jint kind) {
+    (void)env; (void)clazz;
+    return (jint)vkp_framegen_engine_problem((int)kind);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_droiddeck_launcher_wayland_WaylandCompositor_nativeFrameGenEngineReason(JNIEnv *env, jclass clazz, jint kind) {
+    (void)clazz;
+    const char *r = vkp_framegen_engine_reason((int)kind);
+    return (*env)->NewStringUTF(env, r ? r : "");
+}

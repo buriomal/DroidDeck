@@ -278,7 +278,7 @@ public final class LinuxRuntime {
                 bind(cmd, fake.getPath() + ":" + entry[1]);
             }
         }
-        bindGpuNode(context, cmd);
+        bindGpuNode(context, cmd, extraBinds);
         bindAdrenoStats(cmd, extraBinds);
         bindCpuTemps(cmd, root);
         if (extraBinds != null) {
@@ -297,7 +297,7 @@ public final class LinuxRuntime {
      * may open) stands in: it appears as a render node with the sysfs entries libdrm reads, and our
      * Turnip build reports the same device numbers for it.
      */
-    private static void bindGpuNode(Context context, List<String> cmd) {
+    private static void bindGpuNode(Context context, List<String> cmd, List<String> extraBinds) {
         // On a Mali (MediaTek) the kbase node stands in the same way, named as mainline names a
         // Mali's render node (panfrost): PanVK built for kbase reports its device number as the
         // render and primary node, which gamescope needs to match the device to the compositor's.
@@ -338,10 +338,17 @@ public final class LinuxRuntime {
             }
             // What MangoHud names a GPU's driver by; msm_drm is how an Adreno's render node reads
             // on a mainline kernel, and the driver it reads the load of (bindAdrenoStats); panfrost
-            // is a Mali's.
+            // is a Mali's. For panfrost MangoHud reads DRM fdinfo and a gpu_thermal hwmon, which
+            // kbase has neither of; where the session feeds KGSL's stats files itself (a Mali's
+            // GED, devfreq and thermal values, GpuStatsComponent), the node reads msm_drm too, so
+            // MangoHud takes them from there.
             File driver = new File(device, "driver");
-            String driverTarget = "/sys/bus/platform/drivers/" + (mali ? "panfrost" : "msm_drm");
-            if (Files.isSymbolicLink(driver.toPath())
+            String driverTarget = "/sys/bus/platform/drivers/"
+                    + (mali && !feedsKgslStats(extraBinds) ? "panfrost" : "msm_drm");
+            // A one-off command (no session binds) leaves a Mali's label as the session set it:
+            // this tree is the one a running session sees.
+            boolean keep = mali && extraBinds == null;
+            if (!keep && Files.isSymbolicLink(driver.toPath())
                     && !driverTarget.equals(Files.readSymbolicLink(driver.toPath()).toString())) {
                 Files.delete(driver.toPath());
             }
@@ -355,6 +362,12 @@ public final class LinuxRuntime {
         bind(cmd, dri.getPath() + ":/dev/dri");
         bind(cmd, gpuDevice + ":/dev/dri/" + node);
         bindDrmClass(base, cmd, node, major + ":" + minor);
+    }
+
+    /** The session binds its own KGSL stats directory (GpuStatsComponent.binds). */
+    private static boolean feedsKgslStats(List<String> extraBinds) {
+        if (extraBinds != null) for (String spec : extraBinds) if (spec.endsWith(":/sys/class/kgsl/kgsl-3d0")) return true;
+        return false;
     }
 
     /**

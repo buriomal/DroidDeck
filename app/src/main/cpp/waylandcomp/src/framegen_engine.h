@@ -5,7 +5,7 @@
  *
  * framegen_engine.cpp wraps lsfg::Engine (framegen/lsfg) and winfg::Engine (framegen/winfg)
  * unmodified - the same objects the X11 renderer (VulkanRendererContext) drives - and fills
- * their dispatch tables from the compositor's own Turnip entry points. The standalone
+ * their dispatch tables from the compositor's own entry points (Turnip, or the system driver). The standalone
  * compositor build (no framegen tree) compiles framegen_engine_stub.c instead, which reports
  * "engines not built in" and generates nothing.
  *
@@ -27,6 +27,10 @@ extern "C" {
  * storage-capable for either engine. */
 const void *fge_probe(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysicalDevice pd,
                       VkFormat ring_fmt);
+/* The device extensions fge_probe's chain needs enabled alongside it (VK_KHR_spirv_1_4 and its
+ * friends on a Vulkan 1.1 driver; none on 1.2+). Writes up to `max` static names into `out` and
+ * returns how many. Only meaningful after fge_probe returned a chain. */
+uint32_t fge_device_extensions(const char **out, uint32_t max);
 /* The device exists; resolve device-level entry points. features_enabled = fge_probe's chain
  * was accepted by vkCreateDevice. */
 void fge_device_ready(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysicalDevice pd,
@@ -35,6 +39,8 @@ void fge_device_ready(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysica
 int fge_caps_ok(int kind);
 /* Why the LSFG gates fail ("supported" when they pass); static string. */
 const char *fge_caps_reason(void);
+/* The same for engine `kind` (Win-FG has its own, much smaller, gate). */
+const char *fge_caps_reason_kind(int kind);
 /* 1 when the engines can generate in `fmt` on this device (storage + linear sampling), beyond the
  * ring format probed at fge_probe - the FP16 scene of HDR frames (vk_present.c). */
 int fge_format_ok(VkFormat fmt);

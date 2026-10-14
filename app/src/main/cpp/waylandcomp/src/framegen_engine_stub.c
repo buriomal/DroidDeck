@@ -7,12 +7,14 @@ const void *fge_probe(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysica
     (void)gipa; (void)inst; (void)pd; (void)ring_fmt;
     return NULL;
 }
+uint32_t fge_device_extensions(const char **out, uint32_t max) { (void)out; (void)max; return 0; }
 void fge_device_ready(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysicalDevice pd,
                       VkDevice dev, VkQueue queue, uint32_t qfam, int features_enabled) {
     (void)gipa; (void)inst; (void)pd; (void)dev; (void)queue; (void)qfam; (void)features_enabled;
 }
 int fge_caps_ok(int kind) { (void)kind; return 0; }
 const char *fge_caps_reason(void) { return "frame-generation engines not built into this compositor"; }
+const char *fge_caps_reason_kind(int kind) { (void)kind; return fge_caps_reason(); }
 int fge_format_ok(VkFormat fmt) { (void)fmt; return 0; }
 int fge_start(int kind, const char *cache_path) { (void)kind; (void)cache_path; return -1; }
 void fge_stop(void) {}

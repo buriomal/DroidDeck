@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import com.droiddeck.launcher.core.FileUtils
+import com.droiddeck.launcher.session.GpuStatsComponent
 import com.droiddeck.launcher.session.SessionPrefs
 import java.io.File
 import java.util.Locale
@@ -73,6 +74,12 @@ object DeviceInfo {
         add("Clock range", gpuRange())
         add("Load", read("$kgsl/gpu_busy_percentage")?.let { if (it.endsWith("%")) it else "$it %" })
         add("Temperature", read("$kgsl/temp")?.toLongOrNull()?.let { if (it > 1000) "${it / 1000} °C" else "$it °C" })
+        // A Mali: the sources the performance overlay is fed from (GpuStatsComponent), and which.
+        if (!File(kgsl).exists()) {
+            GpuStatsComponent.maliLoad()?.let { s -> add("Load", s.read()?.let { "$it % (${s.path})" }) }
+            GpuStatsComponent.maliClock()?.let { s -> add("Clock now", s.read()?.let { "$it MHz (${s.path})" }) }
+            GpuStatsComponent.maliTemp()?.let { s -> add("Temperature", s.read()?.let { "${it / 1000} °C (${s.path})" }) }
+        }
         add("Support", gpu.supportText)
     })
 

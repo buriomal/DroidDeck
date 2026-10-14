@@ -48,6 +48,10 @@ void vkp_framegen_set_winfg_tuning(int model, int perf_preset);
  * 2 the engine failed to start / build its chain. */
 int vkp_framegen_problem(void);
 const char *vkp_framegen_caps_reason(void);
+/* The same two for engine `kind` whether or not it is the selected one (the app's picker greys
+ * out an engine the driver cannot run). */
+int vkp_framegen_engine_problem(int kind);
+const char *vkp_framegen_engine_reason(int kind);
 /* Same shape as VulkanRenderer.getFrameGenStats(): {generations trusted, generations planned,
  * real (source) fps, presented fps incl. generated frames, thermal (-1 = none), ms per
  * generated frame (-1 = unknown)}. */
@@ -61,6 +65,9 @@ unsigned vkp_framegen_stats_take(void);
  * Win-FG needs no feature). Owned by the bridge, valid until the next call. */
 const void *vkp_framegen_device_features(VkInstance inst, PFN_vkGetInstanceProcAddr gipa,
                                          VkPhysicalDevice pd);
+/* The device extensions that chain needs enabled with it (only a Vulkan 1.1 driver needs any:
+ * VK_KHR_spirv_1_4 and friends). Up to `max` names into `out`; returns the count. */
+uint32_t vkp_framegen_device_extensions(const char **out, uint32_t max);
 /* After the device exists (features_enabled = the chain above was accepted). */
 void vkp_framegen_device_ready(VkDevice dev, VkQueue queue, uint32_t qfam, int features_enabled);
 /* VK_ERROR_DEVICE_LOST: never touch the device again. */

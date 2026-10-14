@@ -9,6 +9,7 @@ import android.util.Base64
 import android.util.Log
 import com.droiddeck.launcher.core.FileUtils
 import com.droiddeck.launcher.core.HostProcess
+import com.droiddeck.launcher.gpu.MaliVenus
 import com.droiddeck.launcher.session.SessionPrefs
 import org.json.JSONObject
 import java.io.DataInputStream
@@ -212,7 +213,7 @@ object BwrapSpawner {
         val argv = request.getJSONArray("argv").let { a -> (0 until a.length()).map { a.getString(it) } }
         val env = LinkedHashMap<String, String>()
         request.optJSONObject("env")?.let { e -> e.keys().forEach { k -> env[k] = e.getString(k) } }
-        if (binds.any { it.guest == "/dev" }) gpu(rootfs, root, env)?.forEach { addBind(it) }
+        if (binds.any { it.guest == "/dev" }) (gpu(rootfs, root, env) ?: panvk(context, binds, root, env))?.forEach { addBind(it) }
         preload(session, rootfs, env).forEach { addBind(it) }
         browserSandboxes(env)
         return Plan(root, binds, request.optString("cwd", "/").ifEmpty { "/" }, argv, env)
@@ -257,6 +258,68 @@ object BwrapSpawner {
         env["LD_LIBRARY_PATH"] = listOf(env["LD_LIBRARY_PATH"], GPU_DIR).filter { !it.isNullOrEmpty() }.joinToString(":")
         return binds
     }
+
+    /**
+     * The GPU on a Mali, when the session runs PanVK (MaliVenus.panvk): the same driver, bound in
+     * from the app's files - which the session sees at their own path, a sandbox not at all - with
+     * the bcn_layer beside it for BC textures (on only where ENABLE_BCN_COMPUTE says so, as in the
+     * session). The session's own VK_DRIVER_FILES (into files/) reaches here through Flatpak and is
+     * no choice of the app's. PanVK opens /dev/mali0 itself; GL runs on it through Zink.
+     */
+    private fun panvk(context: Context, binds: List<Bind>, root: File, env: MutableMap<String, String>): List<Bind>? {
+        if (!MaliVenus.enabled() || !MaliVenus.panvk() || !File(MaliVenus.MALI_DEVICE).exists()) return null
+        val files = context.filesDir.path
+        fun ours(value: String?) = value.isNullOrEmpty() || value.split(':').all { it.isEmpty() || under(it, files) }
+        if (!ours(env["VK_ICD_FILENAMES"]) || !ours(env["VK_DRIVER_FILES"])) return null
+        if (env["BL_DESKTOP"] == "1" && env["GAMESCOPE_WAYLAND_DISPLAY"] == null) return null
+        // Unpacked and current already: the session prepared it (SessionService) before anything ran.
+        val dir = MaliVenus.panvkDir(context)
+        val driver = File(dir, MaliVenus.PANVK_LIB)
+        val manifest = runCatching { JSONObject(File(dir, "panvk_icd.json").readText()) }.getOrNull()
+        if (!driver.isFile || manifest == null) return null
+        // Built against a newer glibc than some runtimes carry (Freedesktop 23.08 has 2.37). The
+        // loader would find no driver at all there, and Zink no GPU: such an app keeps Flathub's Mesa.
+        val libc = listOf("/usr/lib/aarch64-linux-gnu/libc.so.6", "/usr/lib64/libc.so.6", "/usr/lib/libc.so.6")
+            .map { File(hostPath(binds, root.path, it)) }.firstOrNull { it.isFile }
+        val glibc = libc?.let { runCatching { String(it.readBytes(), Charsets.ISO_8859_1).contains("$PANVK_GLIBC\u0000") }.getOrNull() }
+        if (glibc != true) {
+            Log.w(TAG, "panvk: the runtime's glibc (${libc ?: "not found"}) has no $PANVK_GLIBC; apps draw on the CPU")
+            return null
+        }
+        val out = ArrayList<Bind>()
+        out.add(Bind(driver.canonicalPath, "$GPU_DIR/${MaliVenus.PANVK_LIB}"))
+        // Beside the sandbox root, in the sandbox's own directory: removed with it.
+        val icd = File(root.parentFile, "panvk_icd.json")
+        manifest.getJSONObject("ICD").put("library_path", "$GPU_DIR/${MaliVenus.PANVK_LIB}")
+        icd.writeText(manifest.toString(2))
+        out.add(Bind(icd.path, "$GPU_DIR/panvk_icd.json"))
+        out.add(Bind(MaliVenus.MALI_DEVICE, MaliVenus.MALI_DEVICE))
+        env["VK_DRIVER_FILES"] = "$GPU_DIR/panvk_icd.json"
+        env["VK_ICD_FILENAMES"] = "$GPU_DIR/panvk_icd.json"
+        MaliVenus.PANVK_DRIVER_ENV.forEach { env[it.substringBefore('=')] = it.substringAfter('=') }
+        if (!env.containsKey("MESA_LOADER_DRIVER_OVERRIDE") && !env.containsKey("GALLIUM_DRIVER")) {
+            env["MESA_LOADER_DRIVER_OVERRIDE"] = "zink"
+            env["GALLIUM_DRIVER"] = "zink"
+        }
+        // The layer's manifest as the session has it, pointed at its library's place in here. A
+        // layer that fails to load is skipped by the loader, never the driver with it.
+        val guest = MaliVenus.guestDir(context)
+        val layerLib = File(guest, MaliVenus.LAYER_LIB)
+        val layer = runCatching { JSONObject(File(guest, "implicit_layer.d/bcn_layer.json").readText()) }.getOrNull()
+        if (layerLib.isFile && layer != null) {
+            layer.getJSONObject("layer").put("library_path", "$GPU_DIR/${MaliVenus.LAYER_LIB}")
+            val layers = File(root.parentFile, "implicit_layer.d").apply { mkdirs() }
+            File(layers, "bcn_layer.json").writeText(layer.toString(2))
+            out.add(Bind(layerLib.canonicalPath, "$GPU_DIR/${MaliVenus.LAYER_LIB}"))
+            out.add(Bind(layers.path, "$GPU_DIR/implicit_layer.d"))
+            env["VK_ADD_IMPLICIT_LAYER_PATH"] = (env["VK_ADD_IMPLICIT_LAYER_PATH"]?.split(':')?.filter { !ours(it) }.orEmpty() +
+                "$GPU_DIR/implicit_layer.d").joinToString(":")
+        }
+        return out
+    }
+
+    /** The newest glibc symbol PanVK (and the bcn_layer) need: tools/mali/build-panvk-kbase.sh's build. */
+    private const val PANVK_GLIBC = "GLIBC_2.38"
 
     /**
      * What every program in the session preloads (SessionFiles writes /etc/ld.so.preload): the

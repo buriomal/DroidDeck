@@ -1,7 +1,8 @@
 // C++ side of the Wayland frame-generation bridge - see framegen_engine.h.
 //
 // Hosts the SAME engine objects the X11 renderer drives (lsfg::Engine, winfg::Engine), fed from
-// the compositor's own Turnip entry points. Nothing in framegen/lsfg or framegen/winfg is
+// the compositor's own entry points (Turnip through adrenotools, or the system Vulkan driver -
+// Mali, for one - when there is no Turnip). Nothing in framegen/lsfg or framegen/winfg is
 // modified: the engines take a VkTable (VulkanRendererContext.h) for their dispatch, and one is
 // filled here by name from the compositor's vkGetInstanceProcAddr / vkGetDeviceProcAddr.
 #include "framegen_engine.h"
@@ -28,7 +29,9 @@ namespace {
 VkTable g_table{};
 lsfg::Caps g_caps{};
 VkPhysicalDeviceVulkan12Features g_v12{};
+VkPhysicalDeviceVulkanMemoryModelFeaturesKHR g_mm{};   // the chain below Vulkan 1.2
 VkPhysicalDeviceFeatures2 g_f2{};
+char g_reason[224] = "not probed";                     // fge_caps_reason
 VkPhysicalDevice g_pd = VK_NULL_HANDLE;
 VkDevice g_dev = VK_NULL_HANDLE;
 VkQueue g_queue = VK_NULL_HANDLE;
@@ -71,6 +74,29 @@ void fill_instance(PFN_vkGetInstanceProcAddr gipa, VkInstance inst) {
 #undef X
 }
 
+// "1.3.278" from a VK_MAKE_VERSION value.
+void format_version(uint32_t v, char *out, size_t n) {
+    std::snprintf(out, n, "%u.%u.%u", VK_VERSION_MAJOR(v), VK_VERSION_MINOR(v), VK_VERSION_PATCH(v));
+}
+
+// g_caps.reason (lsfg::explain) plus what it was measured on, so a log line or the menu says
+// why on its own: "unsupported: driver lacks vulkanMemoryModel (device Vulkan 1.1.177)". The
+// ring is the compositor's own RGBA8 image (blitted into the swapchain afterwards), so a
+// format verdict names that format, not the swapchain's.
+void build_reason() {
+    char ver[24];
+    format_version(g_caps.features.deviceApiVersion, ver, sizeof(ver));
+    if (g_caps.features.deviceGatesPass() && g_caps.featuresEnabled && !g_caps.storageOnSwapchainFormat) {
+        std::snprintf(g_reason, sizeof(g_reason),
+                      "unsupported: the generation ring format %d is not storage-image capable (device Vulkan %s)",
+                      (int)g_caps.probedFormat, ver);
+    } else if (std::strncmp(g_caps.reason, "unsupported", 11) == 0) {
+        std::snprintf(g_reason, sizeof(g_reason), "%s (device Vulkan %s)", g_caps.reason, ver);
+    } else {
+        std::snprintf(g_reason, sizeof(g_reason), "%s", g_caps.reason);
+    }
+}
+
 void fill_device(VkDevice dev) {
     if (!g_table.GetDeviceProcAddr) return;
 #define X(n) g_table.n = reinterpret_cast<PFN_vk##n>(g_table.GetDeviceProcAddr(dev, "vk" #n));
@@ -96,32 +122,74 @@ const void *fge_probe(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysica
         if (n) enumExts(pd, nullptr, &n, exts.data());
     }
     g_caps = lsfg::Caps{};
-    // No Vulkan 1.1 compat here: the Wayland compositor only ever runs on Turnip (adrenotools),
-    // which reports 1.3+; the stock-driver case the compat flag exists for cannot reach it.
-    g_caps.features = lsfg::queryFeatures(g_table, pd, exts, /*allowVk11=*/false);
+    // Turnip reports 1.3+ and takes the plain path (SPIR-V 1.6, VkPhysicalDeviceVulkan12Features)
+    // exactly as before. With no Turnip the compositor runs on the system driver (Mali, stock
+    // Adreno), which may report 1.1 or 1.2: there the compat path lowers the modules to SPIR-V
+    // 1.5 (1.2), or to 1.4 with VK_KHR_spirv_1_4 + VK_KHR_vulkan_memory_model enabled (1.1, see
+    // fge_device_extensions). The flag changes nothing on a 1.3+ device.
+    g_caps.features = lsfg::queryFeatures(g_table, pd, exts, /*allowVk11=*/true);
     g_caps.probedFormat = ring_fmt;
     g_caps.storageOnSwapchainFormat = g_table.GetPhysicalDeviceFormatProperties
         ? lsfg::probeStorageFormat(g_table, pd, ring_fmt) : false;
     g_caps.linearBlitOnSwapchainFormat = g_table.GetPhysicalDeviceFormatProperties
         ? lsfg::probeLinearBlit(g_table, pd, ring_fmt) : false;
     g_probed = true;
+    {
+        const lsfg::FeatureSupport &f = g_caps.features;
+        char ver[24];
+        format_version(f.deviceApiVersion, ver, sizeof(ver));
+        ELOG("probe: device Vulkan %s, features2 %d, memory model %d (device scope %d), storage write "
+             "without format %d, extended formats %d, %s, ring format %d storage %d",
+             ver, (int)f.queried, (int)f.vulkanMemoryModel, (int)f.vulkanMemoryModelDeviceScope,
+             (int)f.storageImageWriteWithoutFormat, (int)f.storageImageExtendedFormats,
+             f.apiAtLeast13 ? "SPIR-V 1.6 as is"
+                 : f.extensionPath ? (f.deviceApiVersion < VK_API_VERSION_1_2
+                                          ? "SPIR-V lowered to 1.4 (VK_KHR_spirv_1_4 path)"
+                                          : "SPIR-V lowered to 1.5")
+                 : "no SPIR-V path",
+             (int)ring_fmt, (int)g_caps.storageOnSwapchainFormat);
+    }
     if (!g_caps.features.deviceGatesPass()) {
         lsfg::explain(g_caps);
-        ELOG("device gates for the LSFG chain fail: %s", g_caps.reason);
+        build_reason();
+        ELOG("device gates for the LSFG chain fail: %s", g_reason);
         return nullptr;
     }
-    // Same chain VulkanRendererContext::createLogicalDevice hangs on its device.
-    g_v12 = VkPhysicalDeviceVulkan12Features{};
-    g_v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    g_v12.vulkanMemoryModel = VK_TRUE;
-    g_v12.vulkanMemoryModelDeviceScope =
-        g_caps.features.vulkanMemoryModelDeviceScope ? VK_TRUE : VK_FALSE;
+    // Same chain VulkanRendererContext::createLogicalDevice hangs on its device. The memory
+    // model lives in VkPhysicalDeviceVulkan12Features from 1.2 on; below that (the 1.1 compat
+    // path) only the KHR struct of VK_KHR_vulkan_memory_model may be chained.
+    void *mm_chain;
+    if (g_caps.features.deviceApiVersion < VK_API_VERSION_1_2) {
+        g_mm = VkPhysicalDeviceVulkanMemoryModelFeaturesKHR{};
+        g_mm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES_KHR;
+        g_mm.vulkanMemoryModel = VK_TRUE;
+        g_mm.vulkanMemoryModelDeviceScope =
+            g_caps.features.vulkanMemoryModelDeviceScope ? VK_TRUE : VK_FALSE;
+        mm_chain = &g_mm;
+    } else {
+        g_v12 = VkPhysicalDeviceVulkan12Features{};
+        g_v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        g_v12.vulkanMemoryModel = VK_TRUE;
+        g_v12.vulkanMemoryModelDeviceScope =
+            g_caps.features.vulkanMemoryModelDeviceScope ? VK_TRUE : VK_FALSE;
+        mm_chain = &g_v12;
+    }
     g_f2 = VkPhysicalDeviceFeatures2{};
     g_f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    g_f2.pNext = &g_v12;
+    g_f2.pNext = mm_chain;
     g_f2.features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
     g_f2.features.shaderStorageImageExtendedFormats = VK_TRUE;
     return &g_f2;
+}
+
+uint32_t fge_device_extensions(const char **out, uint32_t max) {
+    // Empty unless the 1.1 compat path was taken (lsfg::extensionNames); only ever asked for
+    // after fge_probe returned a chain, so every name is one the device listed.
+    if (!g_probed || !g_caps.features.deviceGatesPass()) return 0;
+    uint32_t n = 0;
+    for (const char *name : lsfg::extensionNames(g_caps.features))
+        if (n < max) out[n++] = name;
+    return n;
 }
 
 void fge_device_ready(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysicalDevice pd,
@@ -131,8 +199,9 @@ void fge_device_ready(PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysica
     fill_device(dev);
     g_caps.featuresEnabled = features_enabled != 0;
     lsfg::explain(g_caps);
+    build_reason();
     g_ready = true;
-    ELOG("device ready: lsfg caps '%s', storage on ring format %d", g_caps.reason,
+    ELOG("device ready: lsfg caps '%s', storage on ring format %d", g_reason,
          (int)g_caps.storageOnSwapchainFormat);
 }
 
@@ -142,7 +211,16 @@ int fge_caps_ok(int kind) {
     return g_caps.supported() ? 1 : 0;
 }
 
-const char *fge_caps_reason(void) { return g_caps.reason; }
+const char *fge_caps_reason(void) { return g_reason; }
+
+const char *fge_caps_reason_kind(int kind) {
+    if (kind != 1) return g_reason;
+    // Win-FG needs no device features (its SPIR-V 1.3 modules declare only Shader and
+    // ImageQuery), only a storage-capable ring format.
+    if (!g_ready) return "not probed";
+    return g_caps.storageOnSwapchainFormat ? "supported"
+        : "unsupported: the generation ring format is not storage-image capable";
+}
 
 int fge_format_ok(VkFormat fmt) {
     if (!g_ready || !g_table.GetPhysicalDeviceFormatProperties || fmt == VK_FORMAT_UNDEFINED) return 0;

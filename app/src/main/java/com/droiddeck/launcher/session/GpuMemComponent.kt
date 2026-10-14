@@ -19,8 +19,12 @@ import java.io.File
  * - else the size of the KGSL mappings in each of the session's processes' `maps` - only the
  *   buffers the CPU has mapped, so less than the GPU holds (about 40 % of KGSL's own count in a
  *   game on an AYN Thor), but always readable: every process the app can see in `/proc` is one of
- *   its own. `maps` rather than `smaps`, which gives the same sizes but walks page tables to do it:
+ *   its own (on a Mali, its mappings of `/dev/mali0`). `maps` rather than `smaps`, which gives
+ *   the same sizes but walks page tables to do it:
  *   in a game, 180,000 lines and most of a second of CPU a pass.
+ *
+ * On a Mali (kbase) the device's total comes from kbase's `gpu_memory` (its first line, the device
+ * and its pages in use) where the policy allows it, before the maps.
  *
  * Sampled only while the overlay shows (OverlayShown).
  */
@@ -65,6 +69,7 @@ class GpuMemComponent(private val file: File, private val root: File) : SessionP
             anyProcess = true
         }
         if (anyProcess) { source = "$KGSL_ROOT/proc/<pid>/gpumem_*"; return perProcess }
+        for (path in MALI_MEMORY) maliPages(path)?.let { source = path; return it * PAGE_SIZE }
         var mappedKb = 0L
         var anyMap = false
         for (pid in pids) {
@@ -72,7 +77,7 @@ class GpuMemComponent(private val file: File, private val root: File) : SessionP
             mappedKb += kb
             anyMap = true
         }
-        if (anyMap) { source = "/proc/<pid>/maps (KGSL mappings)"; return mappedKb * 1024 }
+        if (anyMap) { source = "/proc/<pid>/maps (GPU device mappings)"; return mappedKb * 1024 }
         return null
     }
 
@@ -80,11 +85,11 @@ class GpuMemComponent(private val file: File, private val root: File) : SessionP
     private fun sessionPids(): List<String> =
         File("/proc").list()?.filter { it.isNotEmpty() && it.all(Char::isDigit) }.orEmpty()
 
-    /** Size of a process's mappings of the KGSL device, in kB; null where its maps cannot be read. */
+    /** Size of a process's mappings of the KGSL (or Mali) device, in kB; null where its maps cannot be read. */
     private fun kgslMappedKb(pid: String): Long? = runCatching {
         var bytes = 0L
         File("/proc/$pid/maps").forEachLine { line ->
-            if (line.endsWith("kgsl-3d0") || line.contains("/dev/dri/renderD")) {
+            if (line.endsWith("kgsl-3d0") || line.endsWith("/dev/mali0") || line.contains("/dev/dri/renderD")) {
                 val dash = line.indexOf('-')
                 val space = line.indexOf(' ')
                 if (dash > 0 && space > dash) {
@@ -111,6 +116,20 @@ class GpuMemComponent(private val file: File, private val root: File) : SessionP
         private const val KGSL_ROOT = "/sys/class/kgsl/kgsl"
         /** GPU memory moves slowly; a pass over every process's maps is ~40 ms of CPU in a game. */
         private const val PERIOD_MS = 5_000L
+
+        /** kbase's GPU memory accounting: the Mali's own sysfs, MediaTek's proc copy, debugfs. */
+        private val MALI_MEMORY = listOf(
+            "/sys/class/misc/mali0/device/gpu_memory", "/proc/mtk_mali/gpu_memory", "/sys/kernel/debug/mali0/gpu_memory",
+        )
+        private val PAGE_SIZE: Long = runCatching { android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE) }
+            .getOrNull()?.takeIf { it > 0 } ?: 4096L
+
+        /** The pages in use on kbase's first line ("mali0   123456"); null where it reads otherwise. */
+        private fun maliPages(path: String): Long? = runCatching {
+            File(path).useLines { lines ->
+                lines.firstOrNull { it.isNotBlank() }?.let { Regex("^\\s*mali\\d*\\s+(\\d+)").find(it)?.groupValues?.get(1)?.toLong() }
+            }
+        }.getOrNull()
 
         private fun readLong(path: String): Long? =
             runCatching { File(path).readText().trim().toLong() }.getOrNull()

@@ -31,11 +31,20 @@ internal fun FrameGenMenu(
             MenuItem(FrameGen.label(context, m), checked = mode == m, enabled = enabled, detail = detail, focusRequester = focus) {
                 onPick(m); host.open = null
             }
+        // An engine the compositor's driver cannot run is greyed out with the driver's reason (only
+        // known once the compositor's device is up, i.e. in a session).
+        val winfgUnsupported = FrameGen.unsupportedReason(FrameGen.ENGINE_WINFG)
+        val lsfgUnsupported = FrameGen.unsupportedReason(FrameGen.ENGINE_LSFG)
         item(FrameGen.Mode.OFF, focus = firstItemFocus)
-        for (m in 2..4) item(FrameGen.Mode(FrameGen.ENGINE_WINFG, m))
+        for (m in 2..4) {
+            item(FrameGen.Mode(FrameGen.ENGINE_WINFG, m), enabled = winfgUnsupported == null,
+                detail = winfgUnsupported.takeIf { m == 2 })
+        }
         val lsfg = (2..4).map { FrameGen.Mode(FrameGen.ENGINE_LSFG, it) } +
             FrameGen.ADAPTIVE_TARGETS.map { FrameGen.Mode(FrameGen.ENGINE_LSFG, target = it) }
-        lsfg.forEachIndexed { i, m -> item(m, enabled = lossless.ready, detail = need.takeIf { i == 0 }) }
+        lsfg.forEachIndexed { i, m ->
+            item(m, enabled = lossless.ready && lsfgUnsupported == null, detail = (lsfgUnsupported ?: need).takeIf { i == 0 })
+        }
         if (lossless.owned) {
             val using = when (lossless.source) {
                 Lossless.Source.STEAM -> stringResource(R.string.lsfg_using_steam)

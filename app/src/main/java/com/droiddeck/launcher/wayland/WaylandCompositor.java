@@ -468,9 +468,9 @@ public final class WaylandCompositor {
     public static native void nativeSendSceneInput(int type, int a, int b);
 
     // ── Frame generation (waylandcomp/src/framegen_bridge.c) ─────────────────────────────────
-    // LSFG Native and Win-FG Native run inside the compositor's Turnip device, the same engines
-    // the X11 VulkanRenderer hosts. Every setter only stores a value; the compositor thread applies
-    // it on its next frame, so they are safe from any thread and before the compositor starts.
+    // LSFG Native and Win-FG Native run inside the compositor's device (Turnip, or the system
+    // driver when there is none), the same engines the X11 VulkanRenderer hosts. Every setter only
+    // stores a value; the compositor thread applies it on its next frame, so they are safe from any thread and before the compositor starts.
     // bionic-fg (the guest-side win-fg layer) is X11-only and has no Wayland counterpart.
     public static final int FG_ENGINE_LSFG = 0, FG_ENGINE_WINFG = 1;
 
@@ -497,6 +497,11 @@ public final class WaylandCompositor {
      *  ({@link #nativeFrameGenCapsReason()} says what), 2 the engine failed to start. */
     public static native int nativeFrameGenProblem();
     public static native String nativeFrameGenCapsReason();
+    /** {@link #nativeFrameGenProblem()} and {@link #nativeFrameGenCapsReason()} for engine {@code kind}
+     *  ({@link #FG_ENGINE_LSFG} / {@link #FG_ENGINE_WINFG}) whether or not it is the selected one, so the
+     *  picker can grey out an engine the compositor's driver cannot run. */
+    public static native int nativeFrameGenEngineProblem(int kind);
+    public static native String nativeFrameGenEngineReason(int kind);
 
     /** Same shape as {@code VulkanRenderer.getFrameGenStats()}: {generations trusted, generations
      *  planned, real fps, presented fps (generated frames included), thermal (-1 = none),

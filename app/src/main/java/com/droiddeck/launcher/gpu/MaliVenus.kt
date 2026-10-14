@@ -41,7 +41,7 @@ object MaliVenus {
     const val MALI_DEVICE = "/dev/mali0"
     private const val PANVK_ASSET = "mali/panvk-guest.tzst"
     /** Bumped with the asset. */
-    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck12"
+    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck13"
     const val PANVK_LIB = "libvulkan_panfrost.so"
     private const val PROBE = "droiddeck-vkprobe"
 
@@ -104,8 +104,7 @@ object MaliVenus {
         val layerGuest = prepare(context)?.parentFile
         return listOf(
             LinuxVulkanDriver.ENV + "=" + icd.absolutePath,
-            // Mesa refuses v14 (the G1 series) without it: "panvk is not well-tested on v14".
-            "PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1",
+        ) + PANVK_DRIVER_ENV + listOf(
             // Read by the session script: log what the loader finds before anything depends on it.
             "BL_MALI_PANVK=" + File(icd.parentFile, PROBE).absolutePath,
             // Which driver build this is, in the log: two test APKs once looked the same from outside.
@@ -117,6 +116,18 @@ object MaliVenus {
             "BL_BCN_GAMES=1",
         ) else emptyList()
     }
+
+    /** What PanVK itself needs wherever it is loaded: the session, and a Flatpak sandbox (BwrapSpawner). */
+    val PANVK_DRIVER_ENV = listOf(
+        // Mesa refuses v14 (the G1 series) without it: "panvk is not well-tested on v14".
+        "PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1",
+    )
+
+    /** Where [preparePanvk] unpacks PanVK; read as it is, nothing unpacked or rewritten. */
+    fun panvkDir(context: Context): File = File(context.filesDir, "mali_panvk")
+
+    /** Where [prepare] unpacks the Venus asset (and the bcn_layer); read as it is, nothing unpacked. */
+    fun guestDir(context: Context): File = File(dir(context), "guest")
 
     fun dir(context: Context): File = File(context.filesDir, "mali_venus")
 

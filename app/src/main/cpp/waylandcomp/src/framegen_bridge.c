@@ -149,15 +149,16 @@ static void mark_failed(int kind) {
 
 /* Same codes as VulkanRenderer.getFrameGenProblem(); computed from the live state so an engine
  * switch from the app is answered at once. */
-int vkp_framegen_problem(void) {
+int vkp_framegen_engine_problem(int kind) {
     if (!g_dev_ready) return -1;
-    int kind = atomic_load(&g_kind);
     if (!fge_caps_ok(kind)) return 1;
     if (start_failed_for(kind)) return 2;
     if (g_engine_ok && g_engine_kind == kind && fge_unavailable()) return 2;
     return 0;
 }
-const char *vkp_framegen_caps_reason(void) { return fge_caps_reason(); }
+int vkp_framegen_problem(void) { return vkp_framegen_engine_problem(atomic_load(&g_kind)); }
+const char *vkp_framegen_caps_reason(void) { return fge_caps_reason_kind(atomic_load(&g_kind)); }
+const char *vkp_framegen_engine_reason(int kind) { return fge_caps_reason_kind(kind); }
 
 void vkp_framegen_stats(float out[6]) {
     float accepted = 0.0f, src = 0.0f, thermal = -1.0f;
@@ -182,6 +183,10 @@ const void *vkp_framegen_device_features(VkInstance inst, PFN_vkGetInstanceProcA
     return fge_probe(gipa, inst, pd, VK_FORMAT_R8G8B8A8_UNORM);
 }
 
+uint32_t vkp_framegen_device_extensions(const char **out, uint32_t max) {
+    return fge_device_extensions(out, max);
+}
+
 void vkp_framegen_device_ready(VkDevice dev, VkQueue queue, uint32_t qfam, int features_enabled) {
     g_dev = dev; g_queue = queue; g_qfam = qfam; g_features_enabled = features_enabled;
 #define R(n) vk.n = (PFN_vk##n)g_vk.GetDeviceProcAddr(dev, "vk" #n)
@@ -192,9 +197,12 @@ void vkp_framegen_device_ready(VkDevice dev, VkQueue queue, uint32_t qfam, int f
     g_vk.GetPhysicalDeviceMemoryProperties(g_pd, &g_memprops);
     fge_device_ready(g_gipa, g_inst, g_pd, dev, queue, qfam, features_enabled);
     g_dev_ready = vk.CreateImage && vk.CreateImageView && vk.CmdPipelineBarrier;
-    FGLOG("engines ready on the compositor's device: LSFG Native %s (%s), Win-FG Native %s",
+    if (!g_dev_ready)
+        FGLOG("frame generation unavailable: the compositor's device is missing image entry points");
+    FGLOG("engines ready on the compositor's device: LSFG Native %s (%s), Win-FG Native %s (%s)",
           fge_caps_ok(VKP_FG_ENGINE_LSFG) ? "available" : "unavailable", fge_caps_reason(),
-          fge_caps_ok(VKP_FG_ENGINE_WINFG) ? "available" : "unavailable");
+          fge_caps_ok(VKP_FG_ENGINE_WINFG) ? "available" : "unavailable",
+          fge_caps_reason_kind(VKP_FG_ENGINE_WINFG));
 }
 
 void vkp_framegen_device_lost(void) { g_dev_lost = 1; }

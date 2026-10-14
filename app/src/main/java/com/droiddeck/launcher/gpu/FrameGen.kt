@@ -100,5 +100,24 @@ object FrameGen {
         return null
     }
 
+    /**
+     * Why the compositor's driver cannot run [engine] ([ENGINE_WINFG] / [ENGINE_LSFG]), e.g.
+     * "driver lacks vulkanMemoryModel (device Vulkan 1.1.177)", or null when it can or it is not
+     * known yet (the compositor's device is not up, or this is another process).
+     */
+    fun unsupportedReason(engine: String): String? {
+        val kind = when (engine) {
+            ENGINE_LSFG -> WaylandCompositor.FG_ENGINE_LSFG
+            ENGINE_WINFG -> WaylandCompositor.FG_ENGINE_WINFG
+            else -> return null
+        }
+        return try {
+            if (WaylandCompositor.nativeFrameGenEngineProblem(kind) != 1) return null
+            WaylandCompositor.nativeFrameGenEngineReason(kind).removePrefix("unsupported: ").ifBlank { null }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     private const val TAG = "FrameGen"
 }

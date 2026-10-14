@@ -1,0 +1,43 @@
+kbase: TLS for every thread slot on v10+, full register count, log thread props
+
+--- a/src/panfrost/lib/kmod/kbase_kmod.c
++++ b/src/panfrost/lib/kmod/kbase_kmod.c
+@@ -35,6 +35,7 @@
+  */
+ 
+ #include <errno.h>
++#include <inttypes.h>
+ #include <fcntl.h>
+ #include <linux/dma-heap.h>
+ #include <stdlib.h>
+@@ -403,12 +404,27 @@
+    uint32_t thread_features = (uint32_t)kbase_gpuprop_get(
+       buf, buf_size, KBASE_GPUPROP_RAW_THREAD_FEATURES, 0);
+    props->max_tasks_per_core = MAX2(thread_features >> 24, 1);
+-   props->num_registers_per_core = thread_features & 0xffff;
++   /* MAX_REGISTERS is 22 bits wide, as panthor reads it; 16 bits truncate
++    * newer GPUs' register files. */
++   props->num_registers_per_core = thread_features & 0x3fffff;
+ 
+-   props->max_tls_instance_per_core = (uint32_t)kbase_gpuprop_get(
++   uint32_t kbase_tls_alloc = (uint32_t)kbase_gpuprop_get(
+       buf, buf_size, KBASE_GPUPROP_TLS_ALLOC, 0);
+-   if (!props->max_tls_instance_per_core)
++   props->max_tls_instance_per_core = kbase_tls_alloc;
++   /* v10+ has no THREAD_TLS_ALLOC register and the hardware indexes TLS by
++    * thread slot, up to max_threads_per_core (panthor assumes the same). A
++    * smaller kbase value makes register spills of different threads share
++    * memory, which shows up as warp-wide garbage in spilling shaders. */
++   if (!props->max_tls_instance_per_core ||
++       (pan_arch(props->gpu_id) >= 10 &&
++        props->max_tls_instance_per_core < props->max_threads_per_core))
+       props->max_tls_instance_per_core = props->max_threads_per_core;
++   mesa_logi("kbase: cores 0x%" PRIx64 ", %u threads/core, %u threads/wg, "
++             "%u tasks/core, %u registers/core, TLS for %u threads (kbase %u)",
++             props->shader_present, props->max_threads_per_core,
++             props->max_threads_per_wg, props->max_tasks_per_core,
++             thread_features & 0x3fffff, props->max_tls_instance_per_core,
++             kbase_tls_alloc);
+ 
+    /* If num_registers_per_core is zero, use fallback defaults per arch. */
+    if (!props->num_registers_per_core) {

@@ -396,7 +396,7 @@ static int has_ext(VkExtensionProperties *e, uint32_t n, const char *name) {
 static int dev_init(void) {
     if (g_dev_state != 0) return g_dev_state == 1 ? 0 : -1;
 
-    /* Load Turnip (adrenotools) and its entry points - NOT the system driver. */
+    /* Load Turnip (adrenotools) and its entry points; with no Turnip (Mali, stock Adreno) the system driver. */
     if (vk_loader_open(g_driver_path, g_library_name, g_native_lib_dir) != 0) {
         LOGE("present: vk_loader_open failed"); g_dev_state = -1; return -1;
     }
@@ -464,9 +464,9 @@ static int dev_init(void) {
     g_vk.GetPhysicalDeviceMemoryProperties(g_pd, &g_memprops);
 
     /* Verify the dmabuf-import extensions are present, and log any that are missing. */
-    const char *dev_exts[7] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, "VK_KHR_external_memory_fd",
-                               "VK_EXT_external_memory_dma_buf", "VK_EXT_image_drm_format_modifier",
-                               "VK_KHR_image_format_list", NULL, NULL};
+    const char *dev_exts[7 + 4] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, "VK_KHR_external_memory_fd",
+                                   "VK_EXT_external_memory_dma_buf", "VK_EXT_image_drm_format_modifier",
+                                   "VK_KHR_image_format_list", NULL, NULL};
     uint32_t n_dev_exts = 5;
     uint32_t ne = 0;
     g_vk.EnumerateDeviceExtensionProperties(g_pd, NULL, &ne, NULL);
@@ -485,7 +485,6 @@ static int dev_init(void) {
      * back to waiting for them on the CPU without it. */
     const int want_sem_fd = has_ext(exts, ne, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
     if (want_sem_fd) dev_exts[n_dev_exts++] = VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
-    free(exts);
 
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -495,6 +494,30 @@ static int dev_init(void) {
      * for them, or NULL on a device that cannot run it (then Win-FG Native alone is offered). A
      * driver that rejects the chain costs nothing: retried once without it, exactly as before. */
     const void *fg_features = vkp_framegen_device_features(g_inst, vk_loader_gipa(), g_pd);
+    /* A Vulkan 1.1 system driver (no Turnip) runs the chain through extensions instead of core 1.2/1.3
+     * (VK_KHR_spirv_1_4 and friends): enabled only with the chain, only when listed, and dropped
+     * again with it on the retry. Turnip (1.3+) gets none: its device is created as before. */
+    const uint32_t n_base_exts = n_dev_exts;
+    if (fg_features) {
+        const char *fg_exts[4];
+        uint32_t nfe = vkp_framegen_device_extensions(fg_exts, 4);
+        for (uint32_t i = 0; i < nfe && n_dev_exts < sizeof(dev_exts) / sizeof(dev_exts[0]); i++) {
+            int dup = 0;
+            for (uint32_t j = 0; j < n_dev_exts; j++) if (!strcmp(dev_exts[j], fg_exts[i])) dup = 1;
+            if (dup) continue;
+            if (!has_ext(exts, ne, fg_exts[i])) {
+                droiddeck_log("framegen", "the driver does not list %s: LSFG Native stays off", fg_exts[i]);
+                fg_features = NULL;
+                n_dev_exts = n_base_exts;
+                break;
+            }
+            dev_exts[n_dev_exts++] = fg_exts[i];
+        }
+        if (fg_features && n_dev_exts > n_base_exts)
+            droiddeck_log("framegen", "LSFG Native on a Vulkan 1.1 driver: %u extension%s enabled for it",
+                          n_dev_exts - n_base_exts, n_dev_exts - n_base_exts == 1 ? "" : "s");
+    }
+    free(exts);
     VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = fg_features,
                               .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
                               .enabledExtensionCount = n_dev_exts, .ppEnabledExtensionNames = dev_exts};
@@ -503,6 +526,7 @@ static int dev_init(void) {
         droiddeck_log("framegen", "the driver refused the LSFG feature set (%s); device created without it",
                    vk_result_name(dr));
         dci.pNext = NULL;
+        dci.enabledExtensionCount = n_base_exts;
         fg_features = NULL;
         dr = g_vk.CreateDevice(g_pd, &dci, NULL, &g_dev);
     }
