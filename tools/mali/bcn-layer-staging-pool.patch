@@ -3,6 +3,7 @@ Reuse decode staging buffers
 Every texture upload allocated and later freed its own staging memory,
 a kernel round trip each way. Sizes are rounded up to a power of two and
 freed buffers kept (up to 96 MiB) for the next upload of that size.
+BCN_STAGING_POOL=0 turns the reuse off.
 
 --- a/src/bcn_layer.hpp
 +++ b/src/bcn_layer.hpp
@@ -14,7 +15,7 @@ freed buffers kept (up to 96 MiB) for the next upload of that size.
  
  #undef VK_LAYER_EXPORT
  #if defined(WIN32)
-@@ -133,6 +134,10 @@
+@@ -133,6 +134,10 @@ struct device {
      std::atomic_bool stop_thread {false};
      std::string dump_buffers_path;
      bool has_more_layers = false;
@@ -25,20 +26,17 @@ freed buffers kept (up to 96 MiB) for the next upload of that size.
  };
  
  struct device *get_device(VkDevice);
---- a/src/buffer.hpp
-+++ b/src/buffer.hpp
-@@ -22,6 +22,8 @@
- };
- 
- struct buffer *find_buffer(VkBuffer);
-+void release_staging_buffer(struct device *dev, std::unique_ptr<struct buffer> buf);
-+void clear_staging_pool(struct device *dev);
- std::unique_ptr<struct buffer> create_staging_buffer(struct device *dev, int size, VkFormat format, int width, int height, std::string_view label = "");
- 
- #endif
 --- a/src/buffer.cpp
 +++ b/src/buffer.cpp
-@@ -25,6 +25,29 @@
+@@ -2,6 +2,7 @@
+ 
+ #include "bcn_layer.hpp"
+ #include <atomic>
++#include <cstdlib>
+ 
+ std::unordered_map<VkBuffer, std::unique_ptr<struct buffer>> buffersMap;
+ std::atomic<int> bufferIdCounter;
+@@ -25,6 +26,29 @@ create_staging_buffer(struct device *dev, int size, VkFormat format, int width,
  	// The descriptor buffer (VkBuffer 0xd2a0000000d2a) size is 64 bytes, 64 bytes were bound,
  	// and the highest out of bounds access was at [79] bytes
  	size = (size + align) & ~align;
@@ -68,7 +66,7 @@ freed buffers kept (up to 96 MiB) for the next upload of that size.
  	VkBufferCreateInfo buffer_create_info = {
  		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
  		.pNext = nullptr,
-@@ -81,6 +104,38 @@
+@@ -81,6 +105,40 @@ create_staging_buffer(struct device *dev, int size, VkFormat format, int width,
  	return staging_buf;
  }
  
@@ -79,7 +77,9 @@ freed buffers kept (up to 96 MiB) for the next upload of that size.
 +{
 +	if (!buf)
 +		return;
-+	if (!dev->stop_thread && buf->size <= kStagingPoolMax / 4) {
++	// BCN_STAGING_POOL=0: free every staging buffer at once, as before (a fallback).
++	static const bool pool = !getenv("BCN_STAGING_POOL") || atoi(getenv("BCN_STAGING_POOL"));
++	if (pool && !dev->stop_thread && buf->size <= kStagingPoolMax / 4) {
 +		std::lock_guard<std::mutex> l(dev->stagingPoolLock);
 +		if (dev->stagingPoolBytes + buf->size <= kStagingPoolMax) {
 +			dev->stagingPoolBytes += buf->size;
@@ -107,9 +107,20 @@ freed buffers kept (up to 96 MiB) for the next upload of that size.
  struct buffer *
  find_buffer(VkBuffer buffer)
  {
+--- a/src/buffer.hpp
++++ b/src/buffer.hpp
+@@ -22,6 +22,8 @@ struct buffer {
+ };
+ 
+ struct buffer *find_buffer(VkBuffer);
++void release_staging_buffer(struct device *dev, std::unique_ptr<struct buffer> buf);
++void clear_staging_pool(struct device *dev);
+ std::unique_ptr<struct buffer> create_staging_buffer(struct device *dev, int size, VkFormat format, int width, int height, std::string_view label = "");
+ 
+ #endif
 --- a/src/staging_resources.cpp
 +++ b/src/staging_resources.cpp
-@@ -414,8 +414,7 @@
+@@ -414,8 +414,7 @@ void StagingResources::Cleanup() {
              dev->table.UnmapMemory(device, buf->memory);
          }
  

@@ -4,6 +4,7 @@ Each renewal used to wait for both graphics subqueues on the CPU. Heap
 generations are kept until both subqueues have completed a later ring
 entry, and each vertex/tiler ring entry stores its heap descriptor into
 the subqueue context, so a renewal only swaps descriptors.
+PANVK_KBASE_HEAP_DRAIN=1 brings the drain back as a fallback.
 
 --- a/src/panfrost/vulkan/csf/panvk_queue.h
 +++ b/src/panfrost/vulkan/csf/panvk_queue.h
@@ -280,7 +281,7 @@ the subqueue context, so a renewal only swaps descriptors.
               kbase_submit_stats.sync_ns / 1e6);
     memset(&kbase_submit_stats, 0, sizeof(kbase_submit_stats));
     kbase_submit_stats.since = now;
-@@ -2961,23 +2987,21 @@
+@@ -2961,23 +2987,32 @@
        /* Heap generations are referenced only by graphics streams.  Preserve
         * overlap with unrelated compute work instead of draining every
         * subqueue before replacing the tiler heap. */
@@ -296,6 +297,17 @@ the subqueue context, so a renewal only swaps descriptors.
 -
 -      result = kbase_renew_tiler_heap(queue);
 -      kbase_submit_stats.renew_ns += os_time_get_nano() - t1;
++      /* PANVK_KBASE_HEAP_DRAIN=1: the old way, waiting for the graphics work
++       * already queued before swapping heaps (a fallback, slower). */
++      static int drain = -1;
++      if (drain < 0)
++         drain = debug_get_bool_option("PANVK_KBASE_HEAP_DRAIN", false);
++      if (drain) {
++         result = kbase_wait_sync_targets(queue, submit->kbase_target_seqnos,
++                                          UINT64_MAX);
++         if (result != VK_SUCCESS)
++            return result;
++      }
 +      result = kbase_renew_tiler_heap(queue, &renewed);
 +      kbase_submit_stats.renew_ns += os_time_get_nano() - t0;
        if (result != VK_SUCCESS)

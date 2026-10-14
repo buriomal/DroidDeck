@@ -57,7 +57,7 @@ and a wait-only submit waiting on its own queue doesn't wait at all.
  
     bool has_stream = false;
     for (uint32_t i = 0; i < submit->qsubmit_count; i++) {
-@@ -2797,37 +2805,70 @@
+@@ -2797,37 +2805,71 @@
           break;
        }
     }
@@ -90,7 +90,8 @@ and a wait-only submit waiting on its own queue doesn't wait at all.
  
 -         if (*wait_count >= KBASE_GPU_WAIT_MAX)
 -            return false;
-+      if (internal && !has_stream && payload.data == submit->queue)
++      if (internal && !has_stream && payload.data == submit->queue &&
++          debug_get_bool_option("PANVK_KBASE_GPU_INTERNAL_WAITS", true))
 +         continue;
  
 -         waits[*wait_count] = (struct kbase_gpu_wait) {
@@ -150,7 +151,7 @@ and a wait-only submit waiting on its own queue doesn't wait at all.
  }
  
  /* Incoming CPU syncs are resolved before emission.  The new work itself is
-@@ -2838,7 +2879,7 @@
+@@ -2838,7 +2880,7 @@
   * neither the CPU nor the GPU busy shows up as time in these. */
  static struct {
     int64_t since;
@@ -159,7 +160,7 @@ and a wait-only submit waiting on its own queue doesn't wait at all.
     int64_t cpu_wait_ns, renew_ns, sync_ns;
  } kbase_submit_stats;
  
-@@ -2854,10 +2895,11 @@
+@@ -2854,10 +2896,11 @@
     if (span < 10000000000ll)
        return;
     mesa_logi("kbase: submit stats %.1f s: %u submits, %u semaphore waits on the CPU "
@@ -173,7 +174,7 @@ and a wait-only submit waiting on its own queue doesn't wait at all.
               kbase_submit_stats.renewals_deferred, kbase_submit_stats.renew_ns / 1e6,
               kbase_submit_stats.sync_ns / 1e6);
     memset(&kbase_submit_stats, 0, sizeof(kbase_submit_stats));
-@@ -2893,27 +2935,28 @@
+@@ -2893,27 +2936,28 @@
     // }
  
     struct kbase_gpu_wait gpu_waits[KBASE_GPU_WAIT_MAX];
