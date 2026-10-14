@@ -392,6 +392,11 @@ def main():
             command = command + ["-nostartupmovies"]
             print("droiddeck-game-env: Unreal game on PanVK: -nostartupmovies", file=sys.stderr)
         mali_probe(env)
+    # Suspending the session freezes the game; Unreal's game thread then gives up on the render
+    # thread after ~30 s ("GameThread timed out waiting for RenderThread") and the game exits.
+    if len(command) > 2 and command[1] == "waitforexitandrun" and is_unreal(command[2]) \
+            and "-nothreadtimeout" not in command:
+        command = command + ["-nothreadtimeout"]
     command, env = start_without_steam(command, env, app_id)
     sync = load_sync()
     launch, launch_env = select_sync(command, env, sync)
