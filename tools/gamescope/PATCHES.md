@@ -52,3 +52,7 @@ app's Wayland-hosted gamescope never reaches, or need a newer gamescope than the
   contents are copied at import. Xwayland without glamor - no GBM on a Mali, where the guest's
   Vulkan is Venus - cycles a few shm buffers, so the Steam client flickered between stale frames
   (its library alternating with the "logging in" screen). Only dma-bufs are memoized now.
+- `0130-linear-when-backend-has-no-modifiers.patch` - this app: a game on PanVK (Octopath
+  Traveler) asked for a 10-bit A2B10G10R10 swapchain, the nested backend offered no modifier for
+  that format (the app's compositor takes 8-bit RGB), and gamescope aborted on
+  `assert( !modifiers.empty() )`, ending the session. It falls back to the linear modifier.

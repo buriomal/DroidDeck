@@ -1,0 +1,32 @@
+From: DroidDeck
+Subject: [PATCH] rendervulkan: linear when the backend offers no modifier
+
+A game on Mali asked for a 10-bit (A2B10G10R10) swapchain, the nested backend offered no
+modifier for that format, and gamescope aborted on assert( !modifiers.empty() ), taking the
+session down. It now falls back to the linear modifier.
+---
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2243,9 +2243,19 @@
+ 		else
+ 		{
+ 			std::span<const uint64_t> modifiers = GetBackend()->GetSupportedModifiers( drmFormat );
+-			assert( !modifiers.empty() );
+-			possibleModifiers = modifiers.data();
+-			numPossibleModifiers = modifiers.size();
++			if ( modifiers.empty() )
++			{
++				// The host compositor offers no modifier for this format (the app's Android
++				// compositor takes 8-bit RGB only, and a game asked for a 10-bit swapchain):
++				// fall back to linear rather than abort the whole session.
++				possibleModifiers = &linear;
++				numPossibleModifiers = 1;
++			}
++			else
++			{
++				possibleModifiers = modifiers.data();
++				numPossibleModifiers = modifiers.size();
++			}
+ 		}
+ 
+ 		for ( size_t i = 0; i < numPossibleModifiers; i++ )
