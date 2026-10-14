@@ -9,7 +9,73 @@
 #define FN(name) static PFN_##name name
 FN(vkCreateInstance); FN(vkEnumeratePhysicalDevices); FN(vkGetPhysicalDeviceProperties2);
 FN(vkGetPhysicalDeviceFeatures); FN(vkEnumerateDeviceExtensionProperties); FN(vkCreateDevice);
-FN(vkDestroyDevice); FN(vkDestroyInstance);
+FN(vkDestroyDevice); FN(vkDestroyInstance); FN(vkGetPhysicalDeviceFeatures2);
+
+/* DXVK (3.x) skips a device silently unless it logs at info level, so the probe repeats its
+ * suitability check (DxvkDeviceCapabilities::checkDeviceCompatibility) and names what fails. */
+static int has_ext(const VkExtensionProperties *e, uint32_t n, const char *name)
+{
+   for (uint32_t i = 0; i < n; i++)
+      if (!strcmp(e[i].extensionName, name))
+         return 1;
+   return 0;
+}
+
+static void dxvk_check(VkPhysicalDevice dev, const VkPhysicalDeviceProperties *props)
+{
+   VkPhysicalDeviceMaintenance6FeaturesKHR m6 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_6_FEATURES_KHR };
+   VkPhysicalDeviceMaintenance5FeaturesKHR m5 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR, .pNext = &m6 };
+   VkPhysicalDeviceDepthClipEnableFeaturesEXT dc = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT, .pNext = &m5 };
+   VkPhysicalDeviceRobustness2FeaturesEXT rb = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT, .pNext = &dc };
+   VkPhysicalDeviceVulkan13Features v13 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, .pNext = &rb };
+   VkPhysicalDeviceVulkan12Features v12 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &v13 };
+   VkPhysicalDeviceVulkan11Features v11 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, .pNext = &v12 };
+   VkPhysicalDeviceFeatures2 f2 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &v11 };
+   vkGetPhysicalDeviceFeatures2(dev, &f2);
+   const VkPhysicalDeviceFeatures *c = &f2.features;
+
+   VkExtensionProperties ext[512];
+   uint32_t ne = 512;
+   vkEnumerateDeviceExtensionProperties(dev, NULL, &ne, ext);
+   int robust = has_ext(ext, ne, "VK_EXT_robustness2") || has_ext(ext, ne, "VK_KHR_robustness2");
+
+   struct { const char *name; int ok; } req[] = {
+#define C(x) { #x, (int)c->x }
+      C(depthBiasClamp), C(depthClamp), C(dualSrcBlend), C(fillModeNonSolid), C(fragmentStoresAndAtomics),
+      C(fullDrawIndexUint32), C(geometryShader), C(imageCubeArray), C(independentBlend), C(multiDrawIndirect),
+      C(multiViewport), C(occlusionQueryPrecise), C(robustBufferAccess), C(sampleRateShading), C(samplerAnisotropy),
+      C(shaderClipDistance), C(shaderCullDistance), C(shaderImageGatherExtended), C(shaderInt16), C(shaderInt64),
+      C(shaderSampledImageArrayDynamicIndexing), C(textureCompressionBC),
+#define V(s, x) { #x, (int)s.x }
+      V(v11, shaderDrawParameters), V(v11, storageBuffer16BitAccess),
+      V(v12, bufferDeviceAddress), V(v12, descriptorIndexing), V(v12, storageBuffer8BitAccess),
+      V(v12, descriptorBindingSampledImageUpdateAfterBind), V(v12, descriptorBindingUpdateUnusedWhilePending),
+      V(v12, descriptorBindingPartiallyBound), V(v12, hostQueryReset), V(v12, runtimeDescriptorArray),
+      V(v12, samplerMirrorClampToEdge), V(v12, scalarBlockLayout), V(v12, shaderInt8), V(v12, timelineSemaphore),
+      V(v12, uniformBufferStandardLayout), V(v12, vulkanMemoryModel),
+      V(v13, inlineUniformBlock), V(v13, computeFullSubgroups), V(v13, dynamicRendering), V(v13, maintenance4),
+      V(v13, shaderDemoteToHelperInvocation), V(v13, shaderZeroInitializeWorkgroupMemory),
+      V(v13, subgroupSizeControl), V(v13, synchronization2),
+      { "depthClipEnable (VK_EXT_depth_clip_enable)", dc.depthClipEnable && has_ext(ext, ne, "VK_EXT_depth_clip_enable") },
+      { "robustBufferAccess2 (robustness2)", rb.robustBufferAccess2 && robust },
+      { "nullDescriptor (robustness2)", rb.nullDescriptor && robust },
+      { "VK_KHR_load_store_op_none", has_ext(ext, ne, "VK_KHR_load_store_op_none") },
+      { "maintenance5 (VK_KHR_maintenance5)", m5.maintenance5 && has_ext(ext, ne, "VK_KHR_maintenance5") },
+      { "maintenance6 (VK_KHR_maintenance6)", m6.maintenance6 && has_ext(ext, ne, "VK_KHR_maintenance6") },
+      { "VK_KHR_swapchain", has_ext(ext, ne, "VK_KHR_swapchain") },
+      { "Vulkan 1.3", props->apiVersion >= VK_API_VERSION_1_3 },
+      { "256 bytes of push constants", props->limits.maxPushConstantsSize >= 256 },
+   };
+   int missing = 0;
+   for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++) {
+      if (!req[i].ok) {
+         printf("  dxvk: missing %s\n", req[i].name);
+         missing++;
+      }
+   }
+   if (!missing)
+      printf("  dxvk: every required feature present\n");
+}
 
 int main(void)
 {
@@ -32,6 +98,7 @@ int main(void)
 #define LOAD(name) name = (PFN_##name)gipa(inst, #name)
    LOAD(vkEnumeratePhysicalDevices); LOAD(vkGetPhysicalDeviceProperties2); LOAD(vkGetPhysicalDeviceFeatures);
    LOAD(vkEnumerateDeviceExtensionProperties); LOAD(vkCreateDevice); LOAD(vkDestroyDevice); LOAD(vkDestroyInstance);
+   LOAD(vkGetPhysicalDeviceFeatures2);
    uint32_t n = 0;
    r = vkEnumeratePhysicalDevices(inst, &n, NULL);
    printf("physical devices: %u (result %d)\n", n, r);
@@ -54,6 +121,7 @@ int main(void)
       uint32_t ne = 0;
       vkEnumerateDeviceExtensionProperties(devs[i], NULL, &ne, NULL);
       printf("  device extensions: %u\n", ne);
+      dxvk_check(devs[i], &p.properties);
       float prio = 1.0f;
       VkDeviceQueueCreateInfo q = { .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                     .queueFamilyIndex = 0, .queueCount = 1, .pQueuePriorities = &prio };
