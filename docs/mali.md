@@ -32,6 +32,8 @@ Linux side's Vulkan to the device's own driver instead:
   PanVK lacks what DXVK requires in the same way: patch 0005 reports clip/cull distances and
   multiViewport (the distances are dropped from shaders and only viewport 0 is drawn, an
   approximation), and the Venus asset's `bcn_layer` is loaded in front of it for BC textures.
+  Both for games only (`PANVK_DXVK_FEATURES=1` and `ENABLE_BCN_COMPUTE=1`, set by
+  `droiddeck-game-env` when the app sets `BL_BCN_GAMES`); the Steam client keeps the real features.
 
 All of it is wired in `gpu/MaliVenus.kt`. The guest half ships as `assets/mali/venus-guest.tzst`.
 

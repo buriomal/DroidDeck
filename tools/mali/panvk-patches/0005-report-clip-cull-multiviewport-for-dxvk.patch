@@ -3,53 +3,82 @@ Report clip/cull distances and multiViewport for DXVK
 DXVK refuses a device without them, so D3D11 games stop with
 "DX11 feature level 10.0 is required". Mali has no clip/cull distances;
 the shader variables are demoted to temporaries and only viewport 0 is
-drawn.
+drawn. Reported only with PANVK_DXVK_FEATURES=1, which DroidDeck sets
+for games.
 
 diff --git a/src/panfrost/vulkan/panvk_vX_physical_device.c b/src/panfrost/vulkan/panvk_vX_physical_device.c
-index 6f8062ef02d..310b7b82168 100644
+index 6f8062ef02d..f7f9155e112 100644
 --- a/src/panfrost/vulkan/panvk_vX_physical_device.c
 +++ b/src/panfrost/vulkan/panvk_vX_physical_device.c
-@@ -326,7 +326,8 @@ panvk_per_arch(get_physical_device_features)(
+@@ -12,6 +12,7 @@
+ #include <sys/sysmacros.h>
+ 
+ #include "git_sha1.h"
++#include "util/u_debug.h"
+ 
+ #include "vk_android.h"
+ #include "vk_device.h"
+@@ -289,6 +290,19 @@ has_texture_compression_bc(const struct panvk_physical_device *physical_device)
+       BITFIELD_BIT(MALI_BC6H_UF16) | BITFIELD_BIT(MALI_BC7_UNORM));
+ }
+ 
++/* DXVK refuses a device without clip/cull distances and multiViewport, which
++ * Mali lacks; they are reported (and approximated, see panvk_vX_shader.c) only
++ * where PANVK_DXVK_FEATURES=1 asks for them: DroidDeck sets it for games, and
++ * leaves the Steam client's own Vulkan on what the hardware really has. */
++static bool
++panvk_dxvk_features(void)
++{
++   static int enabled = -1;
++   if (enabled < 0)
++      enabled = debug_get_bool_option("PANVK_DXVK_FEATURES", false);
++   return enabled;
++}
++
+ void
+ panvk_per_arch(get_physical_device_features)(
+    const struct panvk_instance *instance,
+@@ -326,7 +340,8 @@ panvk_per_arch(get_physical_device_features)(
        .wideLines = true,
        .largePoints = true,
        .alphaToOne = false,
 -      .multiViewport = false,
 +      /* Reported for DXVK, which requires it; one viewport is drawn. */
-+      .multiViewport = true,
++      .multiViewport = panvk_dxvk_features(),
        .samplerAnisotropy = true,
        .textureCompressionETC2 = has_texture_compression_etc2(device),
        .textureCompressionASTC_LDR = has_texture_compression_astc_ldr(device),
-@@ -349,8 +350,9 @@ panvk_per_arch(get_physical_device_features)(
+@@ -349,8 +364,9 @@ panvk_per_arch(get_physical_device_features)(
        .shaderSampledImageArrayDynamicIndexing = true,
        .shaderStorageBufferArrayDynamicIndexing = true,
        .shaderStorageImageArrayDynamicIndexing = true,
 -      .shaderClipDistance = false,
 -      .shaderCullDistance = false,
 +      /* Reported for DXVK; the distances are dropped (panvk_vX_shader.c). */
-+      .shaderClipDistance = true,
-+      .shaderCullDistance = true,
++      .shaderClipDistance = panvk_dxvk_features(),
++      .shaderCullDistance = panvk_dxvk_features(),
        .shaderFloat64 = false,
        .shaderInt64 = true,
        .shaderInt16 = true,
-@@ -966,7 +968,7 @@ panvk_per_arch(get_physical_device_properties)(
+@@ -966,7 +982,7 @@ panvk_per_arch(get_physical_device_properties)(
        .maxDrawIndirectCount = PAN_ARCH >= 10 ? UINT32_MAX : 1,
        .maxSamplerLodBias = (float)INT16_MAX / 256.0f,
        .maxSamplerAnisotropy = 16,
 -      .maxViewports = 1,
-+      .maxViewports = 16,
++      .maxViewports = panvk_dxvk_features() ? 16 : 1,
        .maxViewportDimensions = {MAX_FRAMEBUFFER_DIMENSION, MAX_FRAMEBUFFER_DIMENSION},
        .viewportBoundsRange = {-2.0f * MAX_FRAMEBUFFER_DIMENSION, 2.0f * MAX_FRAMEBUFFER_DIMENSION - 1.0f},
        .viewportSubPixelBits = 0,
-@@ -1004,9 +1006,9 @@ panvk_per_arch(get_physical_device_properties)(
+@@ -1004,9 +1020,9 @@ panvk_per_arch(get_physical_device_properties)(
           PAN_ARCH >= 10 && device->kmod.dev->props.gpu_can_query_timestamp,
        .timestampPeriod =
           PAN_ARCH >= 10 ? panvk_get_gpu_system_timestamp_period(device) : 0,
 -      .maxClipDistances = 0,
 -      .maxCullDistances = 0,
 -      .maxCombinedClipAndCullDistances = 0,
-+      .maxClipDistances = 8,
-+      .maxCullDistances = 8,
-+      .maxCombinedClipAndCullDistances = 8,
++      .maxClipDistances = panvk_dxvk_features() ? 8 : 0,
++      .maxCullDistances = panvk_dxvk_features() ? 8 : 0,
++      .maxCombinedClipAndCullDistances = panvk_dxvk_features() ? 8 : 0,
        .discreteQueuePriorities = 2,
        .pointSizeRange = {pointSizeRangeMin, pointSizeRangeMax},
        .lineWidthRange = {0.0, 7.9921875},

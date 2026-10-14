@@ -41,7 +41,7 @@ object MaliVenus {
     const val MALI_DEVICE = "/dev/mali0"
     private const val PANVK_ASSET = "mali/panvk-guest.tzst"
     /** Bumped with the asset. */
-    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck7"
+    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck8"
     const val PANVK_LIB = "libvulkan_panfrost.so"
     private const val PROBE = "droiddeck-vkprobe"
 
