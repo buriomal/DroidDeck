@@ -1,8 +1,10 @@
 #!/bin/bash
-# Cross-builds leegao/bcn_layer for the aarch64 glibc runtime, in ubuntu:25.10.
+# Cross-builds leegao/bcn_layer (with tools/mali/bcn-layer-khr-aliases.patch applied) for the
+# aarch64 glibc runtime, in ubuntu:25.10.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-cp /ca.crt /usr/local/share/ca-certificates/ccr.crt && update-ca-certificates >/dev/null
+mkdir -p /etc/ssl/certs && cat /ca.crt >> /etc/ssl/certs/ca-certificates.crt
+[ -n "${APT_PROXY:-}" ] && echo "Acquire::https::Proxy \"$APT_PROXY\";" > /etc/apt/apt.conf.d/proxy
 dpkg --add-architecture arm64
 cat > /etc/apt/sources.list.d/ubuntu.sources <<X
 Types: deb

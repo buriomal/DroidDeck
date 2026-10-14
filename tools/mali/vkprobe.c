@@ -136,5 +136,24 @@ int main(void)
       }
    }
    vkDestroyInstance(inst, NULL);
+
+   /* A Vulkan 1.0 instance, as Wine creates its own: the loader reaches the *2 queries there by
+    * their KHR names, and DXVK on Wine enumerates adapters through such an instance. */
+   const char *ext = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
+   VkInstanceCreateInfo ici10 = { .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                                  .enabledExtensionCount = 1, .ppEnabledExtensionNames = &ext };
+   if (vkCreateInstance(&ici10, NULL, &inst) == VK_SUCCESS) {
+      PFN_vkGetPhysicalDeviceFeatures2KHR f2khr =
+         (PFN_vkGetPhysicalDeviceFeatures2KHR)gipa(inst, "vkGetPhysicalDeviceFeatures2KHR");
+      LOAD(vkEnumeratePhysicalDevices); LOAD(vkDestroyInstance);
+      uint32_t n10 = 1;
+      VkPhysicalDevice d10;
+      if (f2khr && vkEnumeratePhysicalDevices(inst, &n10, &d10) >= 0 && n10) {
+         VkPhysicalDeviceFeatures2 f = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+         f2khr(d10, &f);
+         printf("Vulkan 1.0 instance (as Wine's): textureCompressionBC=%u\n", f.features.textureCompressionBC);
+      }
+      vkDestroyInstance(inst, NULL);
+   }
    return n ? 0 : 2;
 }

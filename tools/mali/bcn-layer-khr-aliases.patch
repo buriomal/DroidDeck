@@ -1,0 +1,37 @@
+diff --git a/src/bcn_layer.cpp b/src/bcn_layer.cpp
+index 78d4247..e7fcbe1 100644
+--- a/src/bcn_layer.cpp
++++ b/src/bcn_layer.cpp
+@@ -189,6 +189,17 @@ BCnLayer_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+     table.GetPhysicalDeviceFeatures2 = (PFN_vkGetPhysicalDeviceFeatures2)gip(*pInstance, "vkGetPhysicalDeviceFeatures2");
+     table.GetPhysicalDeviceQueueFamilyProperties = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)gip(*pInstance, "vkGetPhysicalDeviceQueueFamilyProperties");
+ 
++    // A Vulkan 1.0 instance (Wine's own, which DXVK on Wine enumerates adapters through) reaches
++    // the *2 queries by their KHR names: fall back to those where the core ones are missing.
++    if (!table.GetPhysicalDeviceFeatures2)
++        table.GetPhysicalDeviceFeatures2 = (PFN_vkGetPhysicalDeviceFeatures2)gip(*pInstance, "vkGetPhysicalDeviceFeatures2KHR");
++    if (!table.GetPhysicalDeviceProperties2)
++        table.GetPhysicalDeviceProperties2 = (PFN_vkGetPhysicalDeviceProperties2)gip(*pInstance, "vkGetPhysicalDeviceProperties2KHR");
++    if (!table.GetPhysicalDeviceFormatProperties2)
++        table.GetPhysicalDeviceFormatProperties2 = (PFN_vkGetPhysicalDeviceFormatProperties2)gip(*pInstance, "vkGetPhysicalDeviceFormatProperties2KHR");
++    if (!table.GetPhysicalDeviceImageFormatProperties2)
++        table.GetPhysicalDeviceImageFormatProperties2 = (PFN_vkGetPhysicalDeviceImageFormatProperties2)gip(*pInstance, "vkGetPhysicalDeviceImageFormatProperties2KHR");
++
+     {
+     	scoped_lock l(global_lock);
+     	instanceDispatch[GetKey(*pInstance)] = table;
+@@ -1171,6 +1182,14 @@ BCnLayer_GetInstanceProcAddr(VkInstance instance,
+ 	GETPROCADDR(GetPhysicalDeviceImageFormatProperties);
+ 	GETPROCADDR(GetPhysicalDeviceImageFormatProperties2);
+ 	GETPROCADDR(GetPhysicalDeviceFeatures2);
++	// The KHR aliases: the loader calls these on a Vulkan 1.0 instance (Wine's own, which DXVK
++	// on Wine enumerates adapters through), and BC support went unreported there.
++	if (!strcmp(pName, "vkGetPhysicalDeviceFeatures2KHR"))
++		return (PFN_vkVoidFunction)&BCnLayer_GetPhysicalDeviceFeatures2;
++	if (!strcmp(pName, "vkGetPhysicalDeviceFormatProperties2KHR"))
++		return (PFN_vkVoidFunction)&BCnLayer_GetPhysicalDeviceFormatProperties2;
++	if (!strcmp(pName, "vkGetPhysicalDeviceImageFormatProperties2KHR"))
++		return (PFN_vkVoidFunction)&BCnLayer_GetPhysicalDeviceImageFormatProperties2;
+ 	GETPROCADDR(DestroyInstance);
+ 	GETPROCADDR(CreateDevice);
+ 
