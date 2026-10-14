@@ -1,0 +1,91 @@
+From: DroidDeck
+Subject: [PATCH] panvk/kbase: log where submits wait on the CPU
+
+Every 10 s: CPU semaphore waits, tiler heap renewal drains and forced
+syncs, to find why games keep neither the CPU nor the GPU busy.
+---
+--- a/src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c	2026-10-14 09:45:45.699068058 +0000
++++ b/src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c	2026-10-14 09:45:45.701865871 +0000
+@@ -2807,6 +2807,37 @@
+ /* Incoming CPU syncs are resolved before emission.  The new work itself is
+  * only published here; completion is represented by the seqno snapshot and
+  * consumed later by fence/semaphore waits. */
++/* DroidDeck: where a submitting thread waits on the CPU, logged every 10 s.
++ * Waits here stall the submitter while the GPU drains, so a game that keeps
++ * neither the CPU nor the GPU busy shows up as time in these. */
++static struct {
++   int64_t since;
++   uint32_t submits, cpu_waits, renewals;
++   int64_t cpu_wait_ns, drain_ns, renew_ns, sync_ns;
++} kbase_submit_stats;
++
++static void
++kbase_submit_stats_report(void)
++{
++   int64_t now = os_time_get_nano();
++   if (!kbase_submit_stats.since) {
++      kbase_submit_stats.since = now;
++      return;
++   }
++   int64_t span = now - kbase_submit_stats.since;
++   if (span < 10000000000ll)
++      return;
++   mesa_logi("kbase: submit stats %.1f s: %u submits, %u semaphore waits on the CPU "
++             "%.0f ms, %u tiler heap renewals (drain %.0f ms, renew %.0f ms), "
++             "forced syncs %.0f ms",
++             span / 1e9, kbase_submit_stats.submits, kbase_submit_stats.cpu_waits,
++             kbase_submit_stats.cpu_wait_ns / 1e6, kbase_submit_stats.renewals,
++             kbase_submit_stats.drain_ns / 1e6, kbase_submit_stats.renew_ns / 1e6,
++             kbase_submit_stats.sync_ns / 1e6);
++   memset(&kbase_submit_stats, 0, sizeof(kbase_submit_stats));
++   kbase_submit_stats.since = now;
++}
++
+ static VkResult
+ panvk_queue_submit_ioctl_kbase(struct panvk_queue_submit *submit,
+                                const struct vk_queue_submit *vk_submit)
+@@ -2841,10 +2872,15 @@
+       kbase_collect_internal_gpu_waits(submit, vk_submit, gpu_waits,
+                                        &gpu_wait_count);
+ 
++   kbase_submit_stats_report();
++   kbase_submit_stats.submits++;
+    if (vk_submit->wait_count && !native_gpu_waits) {
++      int64_t t0 = os_time_get_nano();
+       result = vk_sync_wait_many(&dev->vk, vk_submit->wait_count,
+                                  vk_submit->waits, VK_SYNC_WAIT_COMPLETE,
+                                  UINT64_MAX);
++      kbase_submit_stats.cpu_waits++;
++      kbase_submit_stats.cpu_wait_ns += os_time_get_nano() - t0;
+       if (result != VK_SUCCESS)
+          return result;
+    }
+@@ -2893,8 +2929,10 @@
+       submit->kbase_target_seqnos[i] = queue->subqueues[i].kbase.emitted_jobs;
+ 
+    if (submit->force_sync) {
++      int64_t t0 = os_time_get_nano();
+       result = kbase_wait_sync_targets(queue, submit->kbase_target_seqnos,
+                                        UINT64_MAX);
++      kbase_submit_stats.sync_ns += os_time_get_nano() - t0;
+       if (result != VK_SUCCESS)
+          return result;
+    }
+@@ -2923,12 +2961,17 @@
+       /* Heap generations are referenced only by graphics streams.  Preserve
+        * overlap with unrelated compute work instead of draining every
+        * subqueue before replacing the tiler heap. */
++      int64_t t0 = os_time_get_nano();
+       result = kbase_wait_graphics_targets(
+          queue, submit->kbase_target_seqnos, UINT64_MAX);
++      int64_t t1 = os_time_get_nano();
++      kbase_submit_stats.renewals++;
++      kbase_submit_stats.drain_ns += t1 - t0;
+       if (result != VK_SUCCESS)
+          return result;
+ 
+       result = kbase_renew_tiler_heap(queue);
++      kbase_submit_stats.renew_ns += os_time_get_nano() - t1;
+       if (result != VK_SUCCESS)
+          return vk_queue_set_lost(&queue->vk,
+                                   "kbase: tiler heap renewal failed");
