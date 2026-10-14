@@ -41,7 +41,7 @@ object MaliVenus {
     const val MALI_DEVICE = "/dev/mali0"
     private const val PANVK_ASSET = "mali/panvk-guest.tzst"
     /** Bumped with the asset. */
-    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck6"
+    private const val PANVK_VERSION = "panvk-kbase-ca16389+droiddeck7"
     const val PANVK_LIB = "libvulkan_panfrost.so"
     private const val PROBE = "droiddeck-vkprobe"
 
@@ -112,7 +112,9 @@ object MaliVenus {
             "BL_MALI_PANVK_BUILD=$PANVK_VERSION",
         ) + if (layerGuest != null && File(layerGuest, LAYER_LIB).isFile) listOf(
             "VK_ADD_IMPLICIT_LAYER_PATH=" + File(layerGuest, "implicit_layer.d").absolutePath,
-            "ENABLE_BCN_COMPUTE=1",
+            // Games only (droiddeck-game-env turns the layer on): loaded into the Steam client's
+            // own Vulkan it broke Big Picture's drawing.
+            "BL_BCN_GAMES=1",
         ) else emptyList()
     }
 

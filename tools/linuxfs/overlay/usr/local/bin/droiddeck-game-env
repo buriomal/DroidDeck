@@ -339,6 +339,10 @@ def main():
         except (OSError, ValueError, TypeError, AttributeError):
             print("droiddeck-game-env: invalid configuration; using inherited environment", file=sys.stderr)
     env = force_ssbs(command, env)
+    # The BC texture layer (Mali): games only. In the Steam client's own Vulkan (ANGLE, gamescope)
+    # it broke Big Picture's drawing, and nothing there uses BC textures.
+    if env.get("BL_BCN_GAMES") == "1" and "DISABLE_BCN_COMPUTE" not in env:
+        env["ENABLE_BCN_COMPUTE"] = "1"
     command, env = start_without_steam(command, env, app_id)
     sync = load_sync()
     launch, launch_env = select_sync(command, env, sync)
