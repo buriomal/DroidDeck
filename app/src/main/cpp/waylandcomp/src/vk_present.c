@@ -1802,7 +1802,16 @@ static int render_impl(int scene_w, int scene_h, const struct vkp_draw *draws, i
         VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO};
         g_vk.QueueSubmit(g_queue, 1, &si, g_fence);
     }
-    VkResult fr = timed_wait(g_fence, UINT64_MAX);
+    /* A frame whose GPU work never finishes freezes the screen with nothing in the log: say so once
+     * per stall, with whether the effect chain ran, and keep waiting. */
+    VkResult fr = timed_wait(g_fence, 3000000000ull);
+    if (fr == VK_TIMEOUT) {
+        droiddeck_log("error", "present: frame still on the GPU after 3 s (effects %s, %d draws, %d generated)",
+                      fx ? "on" : "off", n, ngen);
+        int64_t t_stall = perf_now();
+        while ((fr = timed_wait(g_fence, 3000000000ull)) == VK_TIMEOUT) {}
+        droiddeck_log("error", "present: frame finished after %.1f s more", (perf_now() - t_stall) / 1e9);
+    }
     if (fg) vkp_framegen_presented(presented_gen);
     if (fr == VK_ERROR_DEVICE_LOST || pr == VK_ERROR_DEVICE_LOST) { device_lost("present"); return -1; }
     if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_ERROR_SURFACE_LOST_KHR) {
